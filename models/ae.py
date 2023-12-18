@@ -49,7 +49,7 @@ class EnergyAE(AE):
     def __init__(
         self, encoder, encoder_pre, decoder, ebm, sigma_net, sigma_sq=1e-4, harmonic_pretrain = True,
         energy_detach = True, harmonic_detach = True, 
-        conformal_detach = True, conformal_reg = 1e-1, train_sigma = True
+        conformal_detach = True, reg = None, train_sigma = True
     ):
         super(EnergyAE, self).__init__(encoder, decoder)
         self.ebm = ebm
@@ -58,7 +58,7 @@ class EnergyAE(AE):
         self.energy_detach = energy_detach
         self.harmonic_detach = harmonic_detach
         self.conformal_detach = conformal_detach
-        self.conformal_reg = conformal_reg
+        self.reg = reg
         self.encoder_pre = encoder_pre
         self.sigma = sigma_net
         self.train_sigma = train_sigma
@@ -97,7 +97,7 @@ class EnergyAE(AE):
                 pos_sigma_sq = self.sigma(z).view(-1)
             else:
                 pos_sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
-            total_pos_e = ((pos_recon)/(2 * pos_sigma_sq) - torch.log(pos_sigma_sq)/2 + (pos_log_det_jacobian + pos_e/self.ebm.temperature)/D)/100
+            total_pos_e = ((pos_recon)/(2 * pos_sigma_sq) + torch.log(pos_sigma_sq)/2 + (pos_log_det_jacobian + pos_e/self.ebm.temperature)/D)/10
             loss = total_pos_e.mean()
         
         else:
@@ -226,7 +226,11 @@ class EnergyAE(AE):
         total_neg_e = ((neg_recon)/(2 * neg_sigma_sq) + torch.log(neg_sigma_sq)/2)/10 # +()/100#+(neg_log_det_jacobian+ neg_e/self.ebm.temperature)/D)+neg_log_det_jacobian/D
         # iso_loss = relaxed_volume_preserving_measure(self.decoder, z_c, eta=0.2)
         # e_avg = (total_pos_e.mean() + total_neg_e.mean()).detach().clone()/2
-        loss = total_pos_e.mean() - total_neg_e.mean() + 0.1 * (total_pos_e**2).mean() + 0.1 * (total_neg_e**2).mean()
+        if self.reg is not None:
+            reg_loss = self.reg * ((total_pos_e**2).mean() + (total_neg_e**2).mean())
+        else:
+            reg_loss = 0
+        loss = total_pos_e.mean() - total_neg_e.mean() + reg_loss
          #+ self.conformal_reg * iso_loss
         #  + self.conformal_detach * iso_loss # (2 * self.sigma_sq) * (pos_scaled_harmonic_loss + pos_e/self.ebm.temperature)
         # reg_loss = (2 * self.sigma_sq) * ((pos_e**2).mean() + (neg_e**2).mean())/self.ebm.temperature
@@ -278,7 +282,7 @@ class EnergyAE(AE):
             recon = self.decode(z)
         log_det_jacobian = get_log_det_jacobian(self.decoder, z.detach(), return_avg= False, training=False, create_graph=False)
         recon_error = ((recon - x) ** 2).view(len(x), -1).mean(dim=1)
-        neg_log_prob = recon_error/(2 * (sigma_sq)) - torch.log(sigma_sq)/2 + (energy/self.ebm.temperature + log_det_jacobian)/D 
+        neg_log_prob = recon_error/(2 * (sigma_sq)) + torch.log(sigma_sq)/2 + (energy/self.ebm.temperature + log_det_jacobian)/D 
         return {"neg_log_prob": neg_log_prob, "recon_error": recon_error,
                 "energy": energy, "log_det_jacobian": log_det_jacobian
                }

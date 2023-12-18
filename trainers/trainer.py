@@ -61,8 +61,8 @@ class BaseTrainer:
                     logger.add_val(i_iter, d_val)                   
                 i_iter += 1 # added
         
-        torch.save(model.encoder_pre.state_dict(), "encoder_nae_ho_1.pth")
-        torch.save(model.decoder.state_dict(), "decoder_nae_ho_1.pth")
+        torch.save(model.encoder_pre.state_dict(), "pretrained/encoder_nae_ho_1.pth")
+        torch.save(model.decoder.state_dict(), "pretrained/decoder_nae_ho_1.pth")
         for i_epoch in range(1, cfg['n_epoch_ebm'] + 1):
             for x, _ in train_loader:
                 model.train()
@@ -76,7 +76,7 @@ class BaseTrainer:
                     d_val = model.visualization_step(train_loader, procedure = "train_energy", device=self.device)
                     logger.add_val(i_iter, d_val)
                 i_iter += 1
-        torch.save(model.ebm.state_dict(), "ebm_nae_ho_1.pth")
+        torch.save(model.ebm.state_dict(), "pretrained/ebm_nae_ho_1.pth")
         # model.ebm.load_state_dict(torch.load("ebm_nae_ho_1.pth"))
         import torch.optim as optim
         if not cfg['fix_decoder']:
