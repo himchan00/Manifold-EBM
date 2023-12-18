@@ -5,6 +5,7 @@ import torch
 from models.ae import (
     VAE,
     IRVAE,
+    EnergyAE
 )
 
 from models.modules import (
@@ -12,10 +13,29 @@ from models.modules import (
     FC_image,
     IsotropicGaussian,
     ConvNet28,
-    DeConvNet28
+    DeConvNet28,
+    ConvNet2FC,
+    DeConvNet2,
 )
 
 def get_net(in_dim, out_dim, **kwargs):
+    nh = kwargs.get("nh", 8)
+    out_activation = kwargs.get("out_activation", "linear")
+
+    if kwargs["arch"] == "conv2fc":
+        nh_mlp = kwargs["nh_mlp"]
+        net = ConvNet2FC(
+            in_chan=in_dim,
+            out_chan=out_dim,
+            nh=nh,
+            nh_mlp=nh_mlp,
+            out_activation=out_activation,
+        )
+
+    elif kwargs["arch"] == "deconv2":
+        net = DeConvNet2(
+            in_chan=in_dim, out_chan=out_dim, nh=nh, out_activation=out_activation
+        )
     if kwargs["arch"] == "fc_vec":
         l_hidden = kwargs["l_hidden"]
         activation = kwargs["activation"]
@@ -64,6 +84,8 @@ def get_ae(**model_cfg):
     x_dim = model_cfg['x_dim']
     z_dim = model_cfg['z_dim']
     arch = model_cfg["arch"]
+    min_sigma_sq = model_cfg["min_sigma_sq"]
+    max_sigma_sq = model_cfg["max_sigma_sq"]
     if arch == "vae":
         encoder = get_net(in_dim=x_dim, out_dim=z_dim * 2, **model_cfg["encoder"])
         decoder = get_net(in_dim=z_dim, out_dim=x_dim, **model_cfg["decoder"])
@@ -74,6 +96,17 @@ def get_ae(**model_cfg):
         encoder = get_net(in_dim=x_dim, out_dim=z_dim * 2, **model_cfg["encoder"])
         decoder = get_net(in_dim=z_dim, out_dim=x_dim, **model_cfg["decoder"])
         model = IRVAE(encoder, IsotropicGaussian(decoder), iso_reg=iso_reg, metric=metric)
+    elif arch == "eae":
+        from models.modules import normalized_net, sigma_net_normalizer
+        encoder = get_net(in_dim=x_dim, out_dim=z_dim+1, **model_cfg["encoder"])
+        encoder_pre = get_net(in_dim=x_dim, out_dim=z_dim+1, **model_cfg["encoder"])
+        decoder = get_net(in_dim=z_dim+1, out_dim=x_dim, **model_cfg["decoder"])
+        sigma_net = get_net(in_dim=z_dim+1, out_dim= 1, **model_cfg["sigma"])
+        energy = get_net(in_dim=z_dim+1, out_dim=1, **model_cfg["energy"])
+        from models.energy_based import EnergyBasedModel
+        ebm = EnergyBasedModel(energy, **model_cfg["ebm"])
+        model = EnergyAE(normalized_net(encoder), normalized_net(encoder_pre), decoder, ebm, 
+                         sigma_net_normalizer(sigma_net, min_sigma_sq, max_sigma_sq), **model_cfg["energy_ae"])
     return model
 
 def get_model(cfg, *args, version=None, **kwargs):
@@ -94,6 +127,7 @@ def _get_model_instance(name):
         return {
             "vae": get_ae,
             "irvae": get_ae,
+            "eae": get_ae,
         }[name]
     except:
         raise ("Model {} not available".format(name))

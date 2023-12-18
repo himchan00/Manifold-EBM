@@ -56,3 +56,11 @@ def rectangle_scatter(size, center, color):
 def triangle_scatter(size, center, color):
     
     return Polygon(((center[0], center[1] + size[1]/2), (center[0] - size[0]/2, center[1] - size[1]/2), (center[0] + size[0]/2, center[1] - size[1]/2)), fc=color)
+
+
+from sklearn.metrics import roc_auc_score
+def roc_btw_arr(arr1, arr2):
+    true_label = np.concatenate([np.ones_like(arr1),
+                                 np.zeros_like(arr2)])
+    score = np.concatenate([arr1, arr2])
+    return roc_auc_score(true_label, score)

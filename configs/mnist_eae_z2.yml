@@ -1,0 +1,124 @@
+logdir: 'results/MNIST/DIM_2/'
+logger: 
+  type: base
+  endwith: ['@']
+model:
+  arch: eae 
+  # encoder:
+  #   arch: fc_image
+  #   l_hidden: [256, 256, 256, 256, ]
+  #   activation: ['relu', 'relu', 'relu', 'relu', ]
+  #   out_activation: 'linear'
+  #   img_size: [1, 28, 28]
+  #   out_chan_num: 1
+  # decoder:
+  #   arch: fc_image
+  #   l_hidden: [256, 256, 256, 256, ]
+  #   activation: ['relu', 'relu', 'relu', 'relu', ]
+  #   out_activation: 'sigmoid'
+  #   img_size: [1, 28, 28]
+  #   out_chan_num: 1
+  encoder: 
+    arch: conv2fc 
+    nh: 8
+    nh_mlp: 1024
+    out_activation: linear 
+  decoder:
+    arch: deconv2
+    nh: 8
+    out_activation: sigmoid 
+  energy:
+    arch: fc_image
+    l_hidden: [256, 256, 256, 256, 256] # [256, 256, 256, 256]
+    activation: ['relu', 'relu', 'relu', 'relu', 'relu']
+    out_activation: 'linear'
+    out_chan_num: 1
+  sigma:
+    arch: fc_image
+    l_hidden: [256, 256, 256, 256, 256]
+    activation: ['relu', 'relu', 'relu', 'relu' , 'relu' ]
+    out_activation: 'sigmoid'
+    out_chan_num: 1
+  x_dim: 1
+  z_dim: 32
+  min_sigma_sq: 1e-4
+  max_sigma_sq: 1e-2
+  energy_ae:
+    sigma_sq: 1e-2
+    conformal_reg: null
+    harmonic_pretrain: false
+    energy_detach: false
+    harmonic_detach: false
+    conformal_detach: false
+    train_sigma: True
+  ebm:
+    gamma: 1.0
+    temperature: 0.01
+    step_size: 0.001
+    noise_scale: null
+    sample_step: 300
+    buffer_size: 10000
+    replay_ratio: 0.9
+    langevin_clip_grad: Null
+data:
+  training:
+    dataset: MNIST
+    root: dataset
+    batch_size: 256
+    n_workers: 4
+    split: training
+    shuffle: True
+    digits: [0, 1, 3, 4, 5, 6, 7, 8, 9]
+  validation:
+    dataset: MNIST
+    root: dataset
+    batch_size: 256
+    n_workers: 4
+    split: validation
+    shuffle: False
+    digits: [0, 1, 3, 4, 5, 6, 7, 8, 9]
+  test:
+    dataset: MNIST
+    root: dataset
+    batch_size: 256
+    n_workers: 4
+    split: test
+    shuffle: False
+    digits: [0, 1, 3, 4, 5, 6, 7, 8, 9]
+  OOD_validation:
+    dataset: MNIST
+    root: dataset
+    batch_size: 256
+    n_workers: 4
+    split: validation
+    shuffle: False
+    digits: [2]
+  OOD_test:
+    dataset: MNIST
+    root: dataset
+    batch_size: 256
+    n_workers: 4
+    split: test
+    shuffle: False
+    digits: [2]
+  
+trainer: base
+training:
+  n_epoch: 500
+  n_epoch_pre: 100
+  n_epoch_ebm: 50
+  fix_decoder: True
+  optimizer_pre:
+    name: 'adam'
+    lr: 1e-4
+  optimizer:
+    lr_encoder: 1e-5
+    lr_encoder_pre: 1e-4
+    lr_decoder: 1e-5
+    lr_energy: 1e-5
+    lr_sigma: 1e-5
+  print_interval: 100
+  val_interval: 100
+  visualize_interval: 100
+
+ 

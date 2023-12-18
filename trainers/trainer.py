@@ -1,70 +1,193 @@
 import os
 import time
 import math
-
+import copy
 import numpy as np
 import torch
 from metrics import averageMeter
+from utils.utils import roc_btw_arr
 
 class BaseTrainer:
     """Trainer for a conventional iterative training of model for classification"""
-    def __init__(self, optimizer, training_cfg, device):
+    def __init__(self, optimizer, optimizer_pre, optimizer_e, training_cfg, device):
         self.training_cfg = training_cfg
         self.device = device
         self.optimizer = optimizer
+        self.optimizer_pre = optimizer_pre
+        self.optimizer_e = optimizer_e
 
     def train(self, model, d_dataloaders, logger=None, logdir=""):
         cfg = self.training_cfg
     
         time_meter = averageMeter()
-        train_loader, val_loader = (d_dataloaders["training"], d_dataloaders["validation"])
+        train_loader, val_loader, test_loader = (d_dataloaders["training"], d_dataloaders["validation"], d_dataloaders["test"])
+        OOD_val_loader, OOD_test_loader = (d_dataloaders["OOD_validation"], d_dataloaders["OOD_test"])
         kwargs = {'dataset_size': len(train_loader.dataset)}
         i_iter = 0
         best_val_loss = np.inf
-    
+
+        # model.encoder_pre.load_state_dict(torch.load("encoder_nae_ho_1.pth"))
+        # model.decoder.load_state_dict(torch.load("decoder_nae_ho_1.pth"))
+        for i_epoch in range(1, cfg['n_epoch_pre'] + 1):
+            for x, _ in train_loader:
+                model.train()
+                d_train = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, **kwargs)
+                logger.process_iter_train(d_train)
+                if i_iter % cfg.print_interval == 0:
+                    print(f'Pretraining_AE: {i_iter}', d_train['loss'])
+                    logger.add_val(i_iter, d_train)
+                if i_iter % cfg.val_interval == 0:
+                    in_pred = self.predict(model, val_loader, self.device)
+                    ood1_pred = self.predict(model, OOD_val_loader, self.device)
+                    for key, val in in_pred.items():
+                        auc_val = roc_btw_arr(ood1_pred[key], val)
+                        print(f'AUC_val({key}): ', auc_val)
+                        print(f'mean_in: {val.mean()}, mean_ood: {ood1_pred[key].mean()}')
+                        logger.add_val(i_iter, {f'validation/auc/{key}_': auc_val})
+                        logger.add_val(i_iter, {f'validation/mean_in/{key}_': val.mean()})
+                        logger.add_val(i_iter, {f'validation/mean_ood/{key}_': ood1_pred[key].mean()})
+
+                    in_pred = self.predict(model, test_loader, self.device)
+                    ood1_pred = self.predict(model, OOD_test_loader, self.device)
+                    for key, val in in_pred.items():
+                        auc_val = roc_btw_arr(ood1_pred[key], val)
+                        print(f'AUC_test({key}): ', auc_val)
+                        print(f'mean_in: {val.mean()}, mean_ood: {ood1_pred[key].mean()}')
+                        logger.add_val(i_iter, {f'test/auc/{key}_': auc_val})
+                        logger.add_val(i_iter, {f'test/mean_in/{key}_': val.mean()})
+                        logger.add_val(i_iter, {f'test/mean_ood/{key}_': ood1_pred[key].mean()})
+                if i_iter % cfg.visualize_interval == 0:
+                    d_val = model.visualization_step(train_loader, procedure = "pretrain", device=self.device)
+                    logger.add_val(i_iter, d_val)                   
+                i_iter += 1 # added
+        
+        torch.save(model.encoder_pre.state_dict(), "encoder_nae_ho_1.pth")
+        torch.save(model.decoder.state_dict(), "decoder_nae_ho_1.pth")
+        for i_epoch in range(1, cfg['n_epoch_ebm'] + 1):
+            for x, _ in train_loader:
+                model.train()
+                d_train = model.train_energy_step(x.to(self.device), optimizer_e=self.optimizer_e, **kwargs)
+                logger.process_iter_train(d_train)  
+                if i_iter % cfg.print_interval == 0:
+                    print(f'Pretraining_ebm: {i_iter}', d_train['loss'])
+                    logger.add_val(i_iter, d_train)
+                   
+                if i_iter % cfg.visualize_interval == 0:
+                    d_val = model.visualization_step(train_loader, procedure = "train_energy", device=self.device)
+                    logger.add_val(i_iter, d_val)
+                i_iter += 1
+        torch.save(model.ebm.state_dict(), "ebm_nae_ho_1.pth")
+        # model.ebm.load_state_dict(torch.load("ebm_nae_ho_1.pth"))
+        import torch.optim as optim
+        if not cfg['fix_decoder']:
+            model.encoder = copy.deepcopy(model.encoder_pre)
+            self.optimizer_pre = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
+                                           # {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']}
+                            ])
+            self.optimizer_real_pre = optim.Adam([{'params': model.encoder_pre.parameters(), 'lr': cfg.optimizer['lr_encoder']},
+                                           {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']}
+                            ])
+            
+            if model.train_sigma:
+                optimizer = optim.Adam([# 'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
+                                        {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
+                                        {'params': model.sigma.parameters(), 'lr': cfg.optimizer['lr_sigma']}
+                                        # {'params': model.ebm.parameters(), 'lr': cfg.training.optimizer['lr_energy']}
+                                        ])
+            else:
+                optimizer = optim.Adam([#{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
+                                        {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
+                                        # {'params': model.ebm.parameters(), 'lr': cfg.training.optimizer['lr_energy']}
+                                        ])
+        else:
+            for param in model.decoder.parameters():
+                param.requires_grad = False
+            # for param in model.ebm.parameters():
+            #     param.requires_grad = False
+            model.encoder = copy.deepcopy(model.encoder_pre)
+            self.optimizer_pre = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']}])
+            if model.train_sigma:
+                optimizer = optim.Adam([# {'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
+                                        {'params': model.sigma.parameters(), 'lr': cfg.optimizer['lr_sigma']}
+                                        # {'params': model.ebm.parameters(), 'lr': cfg.training.optimizer['lr_energy']}
+                                        ])
+            else:
+                # optimizer = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
+                #                         # {'params': model.ebm.parameters(), 'lr': cfg.training.optimizer['lr_energy']}
+                #                         ])
+                optimizer = None
+            
+        self.optimizer = optimizer
         for i_epoch in range(1, cfg['n_epoch'] + 1):
             for x, _ in train_loader:
-                i_iter += 1
-
                 model.train()
                 start_ts = time.time()
-                d_train = model.train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
+                if cfg['fix_decoder']:
+                    if model.train_sigma:
+                        d_train_t, neg_x = model.train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
+                        d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
+                        d_train_p_neg = model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False,neg_x = True, **kwargs)
+                    else:
+                        d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
+                    # d_train_e = model.train_energy_step(x.to(self.device), optimizer_e=self.optimizer_e, pretrain = False, **kwargs)    
+                else:
+                    d_train_t, neg_x = model.train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
+                    d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
+                    d_train_p_neg = model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False,neg_x = True, **kwargs)
+                    model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_real_pre, pretrain =True, **kwargs)
+                    model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_real_pre, pretrain =True,neg_x = True, **kwargs)
+                    d_train_e = model.train_energy_step(x.to(self.device), optimizer_e=self.optimizer_e, pretrain = True, **kwargs)
                 time_meter.update(time.time() - start_ts)
-                logger.process_iter_train(d_train)
-
+                if model.train_sigma:
+                    logger.process_iter_train(d_train_t)
                 if i_iter % cfg.print_interval == 0:
                     d_train = logger.summary_train(i_iter)
                     print(
                         f"Epoch [{i_epoch:d}] \nIter [{i_iter:d}]\tAvg Loss: {d_train['loss/train_loss_']:.6f}\tElapsed time: {time_meter.sum:.4f}"
                     )
                     time_meter.reset()
+                    logger.add_val(i_iter, d_train)
+                    if cfg['fix_decoder']:
+                        if model.train_sigma:
+                            logger.add_val(i_iter, d_train_t)
+                            logger.add_val(i_iter, d_train_p)
+                            logger.add_val(i_iter, d_train_p_neg)
+                        else:
+                            logger.add_val(i_iter,d_train_p)
+
+                        # logger.add_val(i_iter,d_train_e)
+                    else:
+                        logger.add_val(i_iter,d_train_t)
+                        logger.add_val(i_iter,d_train_p)
+                        logger.add_val(i_iter,d_train_p_neg)
+                        logger.add_val(i_iter,d_train_e)
 
                 model.eval()
                 if i_iter % cfg.val_interval == 0:
-                    for x, _ in val_loader:
-                        d_val = model.validation_step(x.to(self.device))
-                        logger.process_iter_val(d_val)
-                    d_val = logger.summary_val(i_iter)
-                    val_loss = d_val['loss/val_loss_']
-                    print(d_val['print_str'])
-                    best_model = val_loss < best_val_loss
+                    in_pred = self.predict(model, val_loader, self.device)
+                    ood1_pred = self.predict(model, OOD_val_loader, self.device)
+                    for key, val in in_pred.items():
+                        auc_val = roc_btw_arr(ood1_pred[key], val)
+                        print(f'AUC_val({key}): ', auc_val)
+                        print(f'mean_in: {val.mean()}, mean_ood: {ood1_pred[key].mean()}')
+                        logger.add_val(i_iter, {f'validation/auc/{key}_': auc_val})
+                        logger.add_val(i_iter, {f'validation/mean_in/{key}_': val.mean()})
+                        logger.add_val(i_iter, {f'validation/mean_ood/{key}_': ood1_pred[key].mean()})
 
-                    if best_model:
-                        print(f'Iter [{i_iter:d}] best model saved {val_loss:.6f} <= {best_val_loss:.6f}')
-                        best_val_loss = val_loss
-                        self.save_model(model, logdir, best=True)
-                    
-                    d_eval = model.eval_step(val_loader, device=self.device)
-                    logger.add_val(i_iter, d_eval)
-                    print_str = f'Iter [{i_iter:d}]'
-                    for key, val in d_eval.items():
-                        if key.endswith('_'):
-                            print_str = print_str + f'\t{key[:-1]}: {val:.4f}'
-                    print(print_str)
-
+                    in_pred = self.predict(model, test_loader, self.device)
+                    ood1_pred = self.predict(model, OOD_test_loader, self.device)
+                    for key, val in in_pred.items():
+                        auc_val = roc_btw_arr(ood1_pred[key], val)
+                        print(f'AUC_test({key}): ', auc_val)
+                        print(f'mean_in: {val.mean()}, mean_ood: {ood1_pred[key].mean()}')
+                        logger.add_val(i_iter, {f'test/auc/{key}_': auc_val})
+                        logger.add_val(i_iter, {f'test/mean_in/{key}_': val.mean()})
+                        logger.add_val(i_iter, {f'test/mean_ood/{key}_': ood1_pred[key].mean()})
+                
                 if i_iter % cfg.visualize_interval == 0:
-                    d_val = model.visualization_step(train_loader, device=self.device)
+                    d_val = model.visualization_step(train_loader, procedure = "train", device=self.device)
                     logger.add_val(i_iter, d_val)
+                i_iter += 1
 
         self.save_model(model, logdir, i_iter="last")
         return model, best_val_loss
@@ -81,3 +204,19 @@ class BaseTrainer:
         save_path = os.path.join(logdir, pkl_name)
         torch.save(state, save_path)
         print(f"Model saved: {pkl_name}")
+
+
+    def predict(self, m, dl, device, flatten=False, pretrain = False):
+        """run prediction for the whole dataset"""
+        l_result = {"neg_log_prob": [], "recon_error": [], "energy":[], "log_det_jacobian":[]}
+        for x, _ in dl:
+            with torch.no_grad():
+                if flatten:
+                    x = x.view(len(x), -1)
+                pred = m.neg_log_prob(x.cuda(device), pretrain=pretrain)
+
+            for key, val in pred.items():
+                l_result[key].append(val.detach().cpu())
+        for key, val in l_result.items():
+            l_result[key] = torch.cat(val)
+        return l_result

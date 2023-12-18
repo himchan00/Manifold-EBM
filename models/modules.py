@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
+import torch.nn.functional as F
 
 def get_activation(s_act):
     if s_act == "relu":
@@ -88,7 +89,7 @@ class FC_image(nn.Module):
             x = x.view(-1, self.in_chan)
             out = self.net(x)
         else:
-            dim = np.int(np.sqrt(self.out_chan / self.out_chan_num))
+            dim = int(np.sqrt(self.out_chan / self.out_chan_num))
             out = self.net(x)
             out = out.reshape(-1, self.out_chan_num, dim, dim)
         return out
@@ -122,6 +123,30 @@ class IsotropicGaussian(nn.Module):
         x_hat = self.net(z)
         return x_hat + torch.randn_like(x_hat) * self.sigma
 
+
+class normalized_net(nn.Module):
+    def __init__(self, net):
+        super().__init__()
+        self.net = net
+
+    def forward(self, x):
+        x = self.net(x)
+        return x / torch.norm(x, dim=1, keepdim=True)
+
+class sigma_net_normalizer(nn.Module):
+    def __init__(self, net, min_sigma_sq, max_sigma_sq):
+        super().__init__()
+        self.net = net
+        self.min = torch.log(torch.tensor(min_sigma_sq))
+        self.max = torch.log(torch.tensor(max_sigma_sq))
+        self.min.requires_grad = False
+        self.max.requires_grad = False
+        
+    def forward(self, x):
+        x = self.net(x)
+
+        x = torch.exp(self.min + (self.max - self.min) * x)
+        return x
 """
 ConvNet for (1, 28, 28) image, following architecture in (Ghosh et al., 2019)
 """
@@ -226,3 +251,75 @@ class DeConvNet28(nn.Module):
         x = self.net(x)
         return x
 
+class ConvNet2FC(nn.Module):
+    """additional 1x1 conv layer at the top"""
+    def __init__(self, in_chan=1, out_chan=64, nh=8, nh_mlp=512, out_activation='linear', use_spectral_norm=False):
+        """nh: determines the numbers of conv filters"""
+        super(ConvNet2FC, self).__init__()
+        self.conv1 = nn.Conv2d(in_chan, nh * 4, kernel_size=3, bias=True)
+        self.conv2 = nn.Conv2d(nh * 4, nh * 8, kernel_size=3, bias=True)
+        self.max1 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.conv3 = nn.Conv2d(nh * 8, nh * 8, kernel_size=3, bias=True)
+        self.conv4 = nn.Conv2d(nh * 8, nh * 16, kernel_size=3, bias=True)
+        self.max2 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.conv5 = nn.Conv2d(nh * 16, nh_mlp, kernel_size=4, bias=True)
+        self.conv6 = nn.Conv2d(nh_mlp, out_chan, kernel_size=1, bias=True)
+        self.in_chan, self.out_chan = in_chan, out_chan
+        self.out_activation = get_activation(out_activation)
+
+
+        layers = [self.conv1,
+                  nn.ReLU(),
+                  self.conv2,
+                  nn.ReLU(),
+                  self.max1,
+                  self.conv3,
+                  nn.ReLU(),
+                  self.conv4,
+                  nn.ReLU(),
+                  self.max2,
+                  self.conv5,
+                  nn.ReLU(),
+                  self.conv6,]
+        if self.out_activation is not None:
+            layers.append(self.out_activation)
+
+
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.net(x).squeeze(2).squeeze(2)
+
+
+class DeConvNet2(nn.Module):
+    def __init__(self, in_chan=1, out_chan=1, nh=8, out_activation='linear',
+                 use_spectral_norm=False):
+        """nh: determines the numbers of conv filters"""
+        super(DeConvNet2, self).__init__()
+        self.conv1 = nn.ConvTranspose2d(in_chan, nh * 16, kernel_size=4, bias=True)
+        self.conv2 = nn.ConvTranspose2d(nh * 16, nh * 8, kernel_size=3, bias=True)
+        self.conv3 = nn.ConvTranspose2d(nh * 8, nh * 8, kernel_size=3, bias=True)
+        self.conv4 = nn.ConvTranspose2d(nh * 8, nh * 4, kernel_size=3, bias=True)
+        self.conv5 = nn.ConvTranspose2d(nh * 4, out_chan, kernel_size=3, bias=True)
+        self.in_chan, self.out_chan = in_chan, out_chan
+        self.out_activation = get_activation(out_activation) 
+
+    def forward(self, x):
+        if len(x.size()) == 4:
+            pass
+        else:
+            x = x.unsqueeze(2).unsqueeze(2)
+        x = self.conv1(x)
+        x = F.relu(x)
+        x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
+        x = self.conv2(x)
+        x = F.relu(x)
+        x = self.conv3(x)
+        x = F.relu(x)
+        x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
+        x = self.conv4(x)
+        x = F.relu(x)
+        x = self.conv5(x)
+        if self.out_activation is not None:
+            x = self.out_activation(x)
+        return x
