@@ -26,58 +26,58 @@ class BaseTrainer:
         i_iter = 0
         best_val_loss = np.inf
 
-        # model.encoder_pre.load_state_dict(torch.load("encoder_nae_ho_1.pth"))
-        # model.decoder.load_state_dict(torch.load("decoder_nae_ho_1.pth"))
-        for i_epoch in range(1, cfg['n_epoch_pre'] + 1):
-            for x, _ in train_loader:
-                model.train()
-                d_train = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, **kwargs)
-                logger.process_iter_train(d_train)
-                if i_iter % cfg.print_interval == 0:
-                    print(f'Pretraining_AE: {i_iter}', d_train['loss'])
-                    logger.add_val(i_iter, d_train)
-                if i_iter % cfg.val_interval == 0:
-                    in_pred = self.predict(model, val_loader, self.device)
-                    ood1_pred = self.predict(model, OOD_val_loader, self.device)
-                    for key, val in in_pred.items():
-                        auc_val = roc_btw_arr(ood1_pred[key], val)
-                        print(f'AUC_val({key}): ', auc_val)
-                        print(f'mean_in: {val.mean()}, mean_ood: {ood1_pred[key].mean()}')
-                        logger.add_val(i_iter, {f'validation/auc/{key}_': auc_val})
-                        logger.add_val(i_iter, {f'validation/mean_in/{key}_': val.mean()})
-                        logger.add_val(i_iter, {f'validation/mean_ood/{key}_': ood1_pred[key].mean()})
+        model.encoder_pre.load_state_dict(torch.load("pretrained/encoder_nae_ho_1.pth"))
+        model.decoder.load_state_dict(torch.load("pretrained/decoder_nae_ho_1.pth"))
+        # for i_epoch in range(1, cfg['n_epoch_pre'] + 1):
+        #     for x, _ in train_loader:
+        #         model.train()
+        #         d_train = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, **kwargs)
+        #         logger.process_iter_train(d_train)
+        #         if i_iter % cfg.print_interval == 0:
+        #             print(f'Pretraining_AE: {i_iter}', d_train['loss'])
+        #             logger.add_val(i_iter, d_train)
+        #         if i_iter % cfg.val_interval == 0:
+        #             in_pred = self.predict(model, val_loader, self.device)
+        #             ood1_pred = self.predict(model, OOD_val_loader, self.device)
+        #             for key, val in in_pred.items():
+        #                 auc_val = roc_btw_arr(ood1_pred[key], val)
+        #                 print(f'AUC_val({key}): ', auc_val)
+        #                 print(f'mean_in: {val.mean()}, mean_ood: {ood1_pred[key].mean()}')
+        #                 logger.add_val(i_iter, {f'validation/auc/{key}_': auc_val})
+        #                 logger.add_val(i_iter, {f'validation/mean_in/{key}_': val.mean()})
+        #                 logger.add_val(i_iter, {f'validation/mean_ood/{key}_': ood1_pred[key].mean()})
 
-                    in_pred = self.predict(model, test_loader, self.device)
-                    ood1_pred = self.predict(model, OOD_test_loader, self.device)
-                    for key, val in in_pred.items():
-                        auc_val = roc_btw_arr(ood1_pred[key], val)
-                        print(f'AUC_test({key}): ', auc_val)
-                        print(f'mean_in: {val.mean()}, mean_ood: {ood1_pred[key].mean()}')
-                        logger.add_val(i_iter, {f'test/auc/{key}_': auc_val})
-                        logger.add_val(i_iter, {f'test/mean_in/{key}_': val.mean()})
-                        logger.add_val(i_iter, {f'test/mean_ood/{key}_': ood1_pred[key].mean()})
-                if i_iter % cfg.visualize_interval == 0:
-                    d_val = model.visualization_step(train_loader, procedure = "pretrain", device=self.device)
-                    logger.add_val(i_iter, d_val)                   
-                i_iter += 1 # added
+        #             in_pred = self.predict(model, test_loader, self.device)
+        #             ood1_pred = self.predict(model, OOD_test_loader, self.device)
+        #             for key, val in in_pred.items():
+        #                 auc_val = roc_btw_arr(ood1_pred[key], val)
+        #                 print(f'AUC_test({key}): ', auc_val)
+        #                 print(f'mean_in: {val.mean()}, mean_ood: {ood1_pred[key].mean()}')
+        #                 logger.add_val(i_iter, {f'test/auc/{key}_': auc_val})
+        #                 logger.add_val(i_iter, {f'test/mean_in/{key}_': val.mean()})
+        #                 logger.add_val(i_iter, {f'test/mean_ood/{key}_': ood1_pred[key].mean()})
+        #         if i_iter % cfg.visualize_interval == 0:
+        #             d_val = model.visualization_step(train_loader, procedure = "pretrain", device=self.device)
+        #             logger.add_val(i_iter, d_val)                   
+        #         i_iter += 1 # added
         
-        torch.save(model.encoder_pre.state_dict(), "pretrained/encoder_nae_ho_1.pth")
-        torch.save(model.decoder.state_dict(), "pretrained/decoder_nae_ho_1.pth")
-        for i_epoch in range(1, cfg['n_epoch_ebm'] + 1):
-            for x, _ in train_loader:
-                model.train()
-                d_train = model.train_energy_step(x.to(self.device), optimizer_e=self.optimizer_e, **kwargs)
-                logger.process_iter_train(d_train)  
-                if i_iter % cfg.print_interval == 0:
-                    print(f'Pretraining_ebm: {i_iter}', d_train['loss'])
-                    logger.add_val(i_iter, d_train)
+        # torch.save(model.encoder_pre.state_dict(), "pretrained/encoder_nae_ho_1.pth")
+        # torch.save(model.decoder.state_dict(), "pretrained/decoder_nae_ho_1.pth")
+        # for i_epoch in range(1, cfg['n_epoch_ebm'] + 1):
+        #     for x, _ in train_loader:
+        #         model.train()
+        #         d_train = model.train_energy_step(x.to(self.device), optimizer_e=self.optimizer_e, **kwargs)
+        #         logger.process_iter_train(d_train)  
+        #         if i_iter % cfg.print_interval == 0:
+        #             print(f'Pretraining_ebm: {i_iter}', d_train['loss'])
+        #             logger.add_val(i_iter, d_train)
                    
-                if i_iter % cfg.visualize_interval == 0:
-                    d_val = model.visualization_step(train_loader, procedure = "train_energy", device=self.device)
-                    logger.add_val(i_iter, d_val)
-                i_iter += 1
-        torch.save(model.ebm.state_dict(), "pretrained/ebm_nae_ho_1.pth")
-        # model.ebm.load_state_dict(torch.load("ebm_nae_ho_1.pth"))
+        #         if i_iter % cfg.visualize_interval == 0:
+        #             d_val = model.visualization_step(train_loader, procedure = "train_energy", device=self.device)
+        #             logger.add_val(i_iter, d_val)
+        #         i_iter += 1
+        # torch.save(model.ebm.state_dict(), "pretrained/ebm_nae_ho_1_more_comp.pth")
+        model.ebm.load_state_dict(torch.load("pretrained/ebm_nae_ho_1_more_comp.pth"))
         import torch.optim as optim
         if not cfg['fix_decoder']:
             model.encoder = copy.deepcopy(model.encoder_pre)
@@ -125,7 +125,7 @@ class BaseTrainer:
                 if cfg['fix_decoder']:
                     if model.train_sigma:
                         d_train_t, neg_x = model.train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
-                        d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
+                        # d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
                         d_train_p_neg = model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False,neg_x = True, **kwargs)
                     else:
                         d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
@@ -150,7 +150,7 @@ class BaseTrainer:
                     if cfg['fix_decoder']:
                         if model.train_sigma:
                             logger.add_val(i_iter, d_train_t)
-                            logger.add_val(i_iter, d_train_p)
+                            # logger.add_val(i_iter, d_train_p)
                             logger.add_val(i_iter, d_train_p_neg)
                         else:
                             logger.add_val(i_iter,d_train_p)

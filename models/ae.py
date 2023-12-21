@@ -77,10 +77,10 @@ class EnergyAE(AE):
         else:
             z = self.encode(x)
         
-        if self.conformal_detach:
-            z_c = z.detach().clone()
-        else:
-            z_c = z
+        # if self.conformal_detach:
+        #     z_c = z.detach().clone()
+        # else:
+        #     z_c = z
 
         # ebm training
         # energy_loss, _, pos_e, neg_e, _, neg_z_sample = self.ebm.energy_loss(z_e)
@@ -91,7 +91,7 @@ class EnergyAE(AE):
         pos_recon = ((recon - x) ** 2).view(len(x), -1).mean(dim=1)
         if not pretrain:
             pos_e = self.ebm(z)
-            pos_log_det_jacobian = get_log_det_jacobian(self.decoder,z, training=False, return_avg=False, create_graph=False)
+            pos_log_det_jacobian = get_log_det_jacobian(self.decoder,z, training=False, return_avg=False, create_graph=True)
             D = torch.prod(torch.tensor(x.shape[1:]))
             if self.train_sigma:
                 pos_sigma_sq = self.sigma(z).view(-1)
@@ -179,7 +179,7 @@ class EnergyAE(AE):
         # neg_x = self.decode(neg_z_sample).detach().clone() + torch.randn_like(x) * (self.sigma_sq**(1/2))
         if self.train_sigma:
             sigma_sq = (self.sigma(neg_z_sample).detach().clone())
-            # sigma_sq = (self.sigma(neg_z_sample.detach().clone())) ** 2 + 1e-6
+            # sigma_sq = (self.sigma(neg_z_sample.detach().clone()))
         else:
             sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
         neg_x = self.decode(neg_z_sample).detach().clone() + torch.randn_like(x) * torch.sqrt(sigma_sq)
@@ -195,11 +195,6 @@ class EnergyAE(AE):
             z_e = z
             neg_z_e = neg_z
 
-        # pos_e =(z_e**2).sum(dim = 1) / 2
-        # neg_e =(neg_z_e**2).sum(dim = 1) / 2
-        # pos_e = self.ebm(z_e)
-        # neg_e = self.ebm(neg_z_e)
-
         if self.harmonic_detach:
             z_h = z.detach().clone()
             neg_z_h = neg_z.detach().clone()
@@ -207,10 +202,13 @@ class EnergyAE(AE):
             z_h = z
             neg_z_h = neg_z
 
-        # pos_log_det_jacobian = get_log_det_jacobian(self.decoder,z_h, training=False, return_avg=False, create_graph=True)
-        # neg_log_det_jacobian = get_log_det_jacobian(self.decoder, neg_z_h, training=False, return_avg=False, create_graph=True)
-        
-        D = torch.prod(torch.tensor(x.shape[1:]))
+        with torch.no_grad():
+            pos_e = self.ebm(z_e)
+            neg_e = self.ebm(neg_z_e)
+            pos_log_det_jacobian = get_log_det_jacobian(self.decoder,z_h, training=False, return_avg=False, create_graph=False)
+            neg_log_det_jacobian = get_log_det_jacobian(self.decoder, neg_z_h, training=False, return_avg=False, create_graph=False)
+            
+            D = torch.prod(torch.tensor(x.shape[1:]))
 
         pos_recon = ((recon - x) ** 2).view(len(x), -1).mean(dim=1)
         neg_recon = ((recon_neg - neg_x) ** 2).view(len(neg_x), -1).mean(dim=1)
@@ -222,8 +220,8 @@ class EnergyAE(AE):
             pos_sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
             neg_sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
             
-        total_pos_e = ((pos_recon)/(2 * pos_sigma_sq) + torch.log(pos_sigma_sq)/2)/10 # )/100 #++ pos_log_det_jacobian/D (+pos_e/self.ebm.temperature)/D
-        total_neg_e = ((neg_recon)/(2 * neg_sigma_sq) + torch.log(neg_sigma_sq)/2)/10 # +()/100#+(neg_log_det_jacobian+ neg_e/self.ebm.temperature)/D)+neg_log_det_jacobian/D
+        total_pos_e = ((pos_recon)/(2 * pos_sigma_sq) + torch.log(pos_sigma_sq)/2 + (pos_e/self.ebm.temperature + pos_log_det_jacobian)/D)/10 # )/100 #++ pos_log_det_jacobian/D (+pos_e/self.ebm.temperature)/D
+        total_neg_e = ((neg_recon)/(2 * neg_sigma_sq) + torch.log(neg_sigma_sq)/2 + (neg_e/self.ebm.temperature + neg_log_det_jacobian)/D)/10 # +()/100#+(neg_log_det_jacobian+ neg_e/self.ebm.temperature)/D)+neg_log_det_jacobian/D
         # iso_loss = relaxed_volume_preserving_measure(self.decoder, z_c, eta=0.2)
         # e_avg = (total_pos_e.mean() + total_neg_e.mean()).detach().clone()/2
         if self.reg is not None:
