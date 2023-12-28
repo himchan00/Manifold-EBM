@@ -183,8 +183,8 @@ class EnergyAE(AE):
         recon = self.decode(z)
         recon_neg = self.decode(neg_z)
 
-        pos_e = self.ebm(z)
-        neg_e = self.ebm(neg_z)
+        pos_e = self.ebm(z)/self.ebm.temperature
+        neg_e = self.ebm(neg_z)/self.ebm.temperature
         pos_log_det_jacobian = get_log_det_jacobian(self.decoder,z, training=False, return_avg=False, create_graph=True)
         neg_log_det_jacobian = get_log_det_jacobian(self.decoder, neg_z, training=False, return_avg=False, create_graph=True)
         
@@ -200,15 +200,12 @@ class EnergyAE(AE):
             pos_sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
             neg_sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
             
-        total_pos_e = ((pos_recon)/(2 * pos_sigma_sq) + torch.log(pos_sigma_sq)/2 + (pos_e/self.ebm.temperature + pos_log_det_jacobian)/D) # )/100 #++ pos_log_det_jacobian/D (+pos_e/self.ebm.temperature)/D
-        total_neg_e = ((neg_recon)/(2 * neg_sigma_sq) + torch.log(neg_sigma_sq)/2 + (neg_e/self.ebm.temperature + neg_log_det_jacobian)/D) # +()/100#+(neg_log_det_jacobian+ neg_e/self.ebm.temperature)/D)+neg_log_det_jacobian/D
+        total_pos_e = ((pos_recon)/(2 * pos_sigma_sq) + torch.log(pos_sigma_sq)/2 + (pos_e + pos_log_det_jacobian)/D) # )/100 #++ pos_log_det_jacobian/D (+pos_e/self.ebm.temperature)/D
+        total_neg_e = ((neg_recon)/(2 * neg_sigma_sq) + torch.log(neg_sigma_sq)/2 + (neg_e + neg_log_det_jacobian)/D) # +()/100#+(neg_log_det_jacobian+ neg_e/self.ebm.temperature)/D)+neg_log_det_jacobian/D
         # iso_loss = relaxed_volume_preserving_measure(self.decoder, z_c, eta=0.2)
-        # e_avg = (total_pos_e.mean() + total_neg_e.mean()).detach().clone()/2
-        if self.reg is not None:
-            reg_loss = self.reg * ((total_pos_e**2).mean() + (total_neg_e**2).mean())
-        else:
-            reg_loss = 0
-        loss = total_pos_e.mean() - total_neg_e.mean() + reg_loss
+        reg_loss = (pos_e**2).mean() + (neg_e**2).mean()
+
+        loss = total_pos_e.mean() - total_neg_e.mean() + self.ebm.gamma * reg_loss/D
          #+ self.conformal_reg * iso_loss
         #  + self.conformal_detach * iso_loss # (2 * self.sigma_sq) * (pos_scaled_harmonic_loss + pos_e/self.ebm.temperature)
         # reg_loss = (2 * self.sigma_sq) * ((pos_e**2).mean() + (neg_e**2).mean())/self.ebm.temperature
