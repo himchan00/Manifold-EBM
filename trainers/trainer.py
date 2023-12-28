@@ -25,7 +25,9 @@ class BaseTrainer:
         kwargs = {'dataset_size': len(train_loader.dataset)}
         i_iter = 0
         best_val_loss = np.inf
-
+        bs = train_loader.batch_size
+        z_dim = model.ebm.net.in_chan
+        z_shape = (bs, z_dim)
         model.encoder_pre.load_state_dict(torch.load("pretrained/encoder_nae_ho_1.pth"))
         model.decoder.load_state_dict(torch.load("pretrained/decoder_nae_ho_1.pth"))
         # for i_epoch in range(1, cfg['n_epoch_pre'] + 1):
@@ -84,15 +86,12 @@ class BaseTrainer:
             self.optimizer_pre = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
                                            # {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']}
                             ])
-            self.optimizer_real_pre = optim.Adam([{'params': model.encoder_pre.parameters(), 'lr': cfg.optimizer['lr_encoder']},
-                                           {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']}
-                            ])
             
             if model.train_sigma:
                 optimizer = optim.Adam([# 'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
                                         {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
-                                        {'params': model.sigma.parameters(), 'lr': cfg.optimizer['lr_sigma']}
-                                        # {'params': model.ebm.parameters(), 'lr': cfg.training.optimizer['lr_energy']}
+                                        {'params': model.sigma.parameters(), 'lr': cfg.optimizer['lr_sigma']},
+                                        {'params': model.ebm.parameters(), 'lr': cfg.optimizer['lr_energy']}
                                         ])
             else:
                 optimizer = optim.Adam([#{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
@@ -102,8 +101,8 @@ class BaseTrainer:
         else:
             for param in model.decoder.parameters():
                 param.requires_grad = False
-            # for param in model.ebm.parameters():
-            #     param.requires_grad = False
+            for param in model.ebm.parameters():
+                param.requires_grad = False
             model.encoder = copy.deepcopy(model.encoder_pre)
             self.optimizer_pre = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']}])
             if model.train_sigma:
@@ -122,21 +121,18 @@ class BaseTrainer:
             for x, _ in train_loader:
                 model.train()
                 start_ts = time.time()
-                if cfg['fix_decoder']:
-                    if model.train_sigma:
-                        d_train_t, neg_x = model.train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
-                        # d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
-                        d_train_p_neg = model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False,neg_x = True, **kwargs)
-                    else:
-                        d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
-                    # d_train_e = model.train_energy_step(x.to(self.device), optimizer_e=self.optimizer_e, pretrain = False, **kwargs)    
+
+                if model.train_sigma:
+                    d_train_t, _ = model.train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
+                    for _ in range(5):
+                        neg_x = model.sample(shape = z_shape, sample_step = model.ebm.sample_step,
+                                                    device = self.device, replay = model.ebm.replay, apply_noise = True)
+                    #d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
+                        d_train_p_neg = model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False,neg_sample = True, **kwargs)
                 else:
-                    d_train_t, neg_x = model.train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
                     d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
-                    d_train_p_neg = model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False,neg_x = True, **kwargs)
-                    model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_real_pre, pretrain =True, **kwargs)
-                    model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_real_pre, pretrain =True,neg_x = True, **kwargs)
-                    d_train_e = model.train_energy_step(x.to(self.device), optimizer_e=self.optimizer_e, pretrain = True, **kwargs)
+                # d_train_e = model.train_energy_step(x.to(self.device), optimizer_e=self.optimizer_e, pretrain = False, **kwargs)    
+
                 time_meter.update(time.time() - start_ts)
                 if model.train_sigma:
                     logger.process_iter_train(d_train_t)
@@ -147,20 +143,14 @@ class BaseTrainer:
                     )
                     time_meter.reset()
                     logger.add_val(i_iter, d_train)
-                    if cfg['fix_decoder']:
-                        if model.train_sigma:
-                            logger.add_val(i_iter, d_train_t)
-                            # logger.add_val(i_iter, d_train_p)
-                            logger.add_val(i_iter, d_train_p_neg)
-                        else:
-                            logger.add_val(i_iter,d_train_p)
-
-                        # logger.add_val(i_iter,d_train_e)
+                    if model.train_sigma:
+                        logger.add_val(i_iter, d_train_t)
+                        # logger.add_val(i_iter, d_train_p)
+                        logger.add_val(i_iter, d_train_p_neg)
                     else:
-                        logger.add_val(i_iter,d_train_t)
                         logger.add_val(i_iter,d_train_p)
-                        logger.add_val(i_iter,d_train_p_neg)
-                        logger.add_val(i_iter,d_train_e)
+
+
 
                 model.eval()
                 if i_iter % cfg.val_interval == 0:

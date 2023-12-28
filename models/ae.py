@@ -65,8 +65,8 @@ class EnergyAE(AE):
         
     def pretrain_step(self, x, optimizer_pre, pretrain  = True, neg_sample = False, **kwargs):
         if not pretrain:
-            # for params in self.decoder.parameters():
-            #     params.requires_grad = False
+            for params in self.decoder.parameters():
+                params.requires_grad = False
             for params in self.ebm.parameters():
                 params.requires_grad = False
             for params in self.sigma.parameters():
@@ -97,7 +97,7 @@ class EnergyAE(AE):
                 pos_sigma_sq = self.sigma(z).view(-1)
             else:
                 pos_sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
-            total_pos_e = ((pos_recon)/(2 * pos_sigma_sq) + torch.log(pos_sigma_sq)/2 + (pos_log_det_jacobian + pos_e/self.ebm.temperature)/D)/10
+            total_pos_e = ((pos_recon)/(2 * pos_sigma_sq) + torch.log(pos_sigma_sq)/2 + (pos_log_det_jacobian + pos_e/self.ebm.temperature)/D)
             loss = total_pos_e.mean()
         
         else:
@@ -123,8 +123,8 @@ class EnergyAE(AE):
         loss.backward()
         optimizer_pre.step()
         if not pretrain:
-            # for params in self.decoder.parameters():
-            #     params.requires_grad = True
+            for params in self.decoder.parameters():
+                params.requires_grad = True
             for params in self.ebm.parameters():
                 params.requires_grad = True
             for params in self.sigma.parameters():
@@ -154,12 +154,7 @@ class EnergyAE(AE):
     
 
     def train_step(self, x, optimizer, **kwargs):
-        # for _ in range(3): # projection training (test 56, 58 비교 해보았을때 필요하지 않은듯 함)
-        #     self.pretrain_step(x, optimizer, **kwargs) 
-        # for params in self.decoder.parameters():
-        #     params.requires_grad = False
-        for params in self.ebm.parameters():
-            params.requires_grad = False
+
         for params in self.encoder.parameters():
             params.requires_grad = False
 
@@ -188,27 +183,12 @@ class EnergyAE(AE):
         recon = self.decode(z)
         recon_neg = self.decode(neg_z)
 
-        if self.energy_detach:
-            z_e = z.detach().clone()
-            neg_z_e = neg_z.detach().clone()
-        else:
-            z_e = z
-            neg_z_e = neg_z
-
-        if self.harmonic_detach:
-            z_h = z.detach().clone()
-            neg_z_h = neg_z.detach().clone()
-        else:
-            z_h = z
-            neg_z_h = neg_z
-
-        with torch.no_grad():
-            pos_e = self.ebm(z_e)
-            neg_e = self.ebm(neg_z_e)
-            pos_log_det_jacobian = get_log_det_jacobian(self.decoder,z_h, training=False, return_avg=False, create_graph=False)
-            neg_log_det_jacobian = get_log_det_jacobian(self.decoder, neg_z_h, training=False, return_avg=False, create_graph=False)
-            
-            D = torch.prod(torch.tensor(x.shape[1:]))
+        pos_e = self.ebm(z)
+        neg_e = self.ebm(neg_z)
+        pos_log_det_jacobian = get_log_det_jacobian(self.decoder,z, training=False, return_avg=False, create_graph=True)
+        neg_log_det_jacobian = get_log_det_jacobian(self.decoder, neg_z, training=False, return_avg=False, create_graph=True)
+        
+        D = torch.prod(torch.tensor(x.shape[1:]))
 
         pos_recon = ((recon - x) ** 2).view(len(x), -1).mean(dim=1)
         neg_recon = ((recon_neg - neg_x) ** 2).view(len(neg_x), -1).mean(dim=1)
@@ -220,8 +200,8 @@ class EnergyAE(AE):
             pos_sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
             neg_sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
             
-        total_pos_e = ((pos_recon)/(2 * pos_sigma_sq) + torch.log(pos_sigma_sq)/2 + (pos_e/self.ebm.temperature + pos_log_det_jacobian)/D)/10 # )/100 #++ pos_log_det_jacobian/D (+pos_e/self.ebm.temperature)/D
-        total_neg_e = ((neg_recon)/(2 * neg_sigma_sq) + torch.log(neg_sigma_sq)/2 + (neg_e/self.ebm.temperature + neg_log_det_jacobian)/D)/10 # +()/100#+(neg_log_det_jacobian+ neg_e/self.ebm.temperature)/D)+neg_log_det_jacobian/D
+        total_pos_e = ((pos_recon)/(2 * pos_sigma_sq) + torch.log(pos_sigma_sq)/2 + (pos_e/self.ebm.temperature + pos_log_det_jacobian)/D) # )/100 #++ pos_log_det_jacobian/D (+pos_e/self.ebm.temperature)/D
+        total_neg_e = ((neg_recon)/(2 * neg_sigma_sq) + torch.log(neg_sigma_sq)/2 + (neg_e/self.ebm.temperature + neg_log_det_jacobian)/D) # +()/100#+(neg_log_det_jacobian+ neg_e/self.ebm.temperature)/D)+neg_log_det_jacobian/D
         # iso_loss = relaxed_volume_preserving_measure(self.decoder, z_c, eta=0.2)
         # e_avg = (total_pos_e.mean() + total_neg_e.mean()).detach().clone()/2
         if self.reg is not None:
@@ -237,8 +217,7 @@ class EnergyAE(AE):
 
         loss.backward()
         optimizer.step()
-        for params in self.ebm.parameters():
-            params.requires_grad = True
+
         for params in self.encoder.parameters():
             params.requires_grad = True
 
@@ -246,22 +225,27 @@ class EnergyAE(AE):
         return {"loss": loss.item(), #"reg_loss": reg_loss.item(), 
                 "AE/total_pos_e_": total_pos_e.mean().item(), "AE/total_neg_e_": total_neg_e.mean().item(),
                 "AE/pos_recon_": pos_recon.mean().item(), 
-                # "AE/pos_log_det_jacobian_": pos_log_det_jacobian.mean().item(),
-                # "AE/pos_e_": pos_e.mean().item(), 
+                "AE/pos_log_det_jacobian_": pos_log_det_jacobian.mean().item(),
+                "EBM/pos_e_": pos_e.mean().item(), 
                 "AE/neg_recon_": neg_recon.mean().item(), 
-                # "AE/neg_log_det_jacobian_": neg_log_det_jacobian.mean().item(),
-                # "AE/neg_e_": neg_e.mean().item(),
-                "AE/pos_sigma_sq_": (pos_sigma_sq).mean().item(), "AE/neg_sigma_sq_": (neg_sigma_sq).mean().item(),
+                "AE/neg_log_det_jacobian_": neg_log_det_jacobian.mean().item(),
+                "EBM/neg_e_": neg_e.mean().item(),
+                "sigma/pos_sigma_sq_": (pos_sigma_sq).mean().item(), "sigma/neg_sigma_sq_": (neg_sigma_sq).mean().item(),
                 #"AE/sin_sq_loss_": sin_sq_loss.item(),
                 # "AE/iso_loss_": iso_loss.item()
                 
         }, neg_x.detach().clone()
     
-    def sample(self, shape, sample_step, device, replay=True):
+    def sample(self, shape, sample_step, device, replay=True, apply_noise = False):
         # sample from latent space
         z = self.ebm.sample(shape=shape, sample_step = sample_step, device=device, replay=replay)
         # decode
-        x = self.decode(z)
+        with torch.no_grad():
+            x = self.decode(z)
+            if apply_noise:
+                    sigma_sq = self.sigma(z)
+                    x = x + torch.randn_like(x) * torch.sqrt(sigma_sq)
+        
         return x
     
     def neg_log_prob(self, x, pretrain = False):
