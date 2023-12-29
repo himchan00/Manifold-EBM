@@ -128,6 +128,7 @@ class normalized_net(nn.Module):
     def __init__(self, net):
         super().__init__()
         self.net = net
+        self.z_dim = net.out_chan
 
     def forward(self, x):
         x = self.net(x)
@@ -251,9 +252,58 @@ class DeConvNet28(nn.Module):
         x = self.net(x)
         return x
 
+class energy_net(nn.Module):
+    def __init__(self, encoder, decoder, nh_mlp=512):
+        super().__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+        self.conv_e = nn.Conv2d(nh_mlp, 1, kernel_size=1, bias=True)
+    def forward(self, z, grad = False):
+        if grad:
+            x_bar = self.decoder(z)
+            x = self.encoder.get_feature(x_bar, grad=True)
+            x = self.conv_e(x).squeeze(2).squeeze(2)
+        else:
+            with torch.no_grad():
+                x_bar = self.decoder(z)
+            x = self.encoder.get_feature(x_bar, grad=False)
+            x = self.conv_e(x).squeeze(2).squeeze(2)
+        return x
+    def forward_with_x(self, x):
+        x = self.encoder.get_feature(x, grad=False)
+        x = self.conv_e(x).squeeze(2).squeeze(2)
+        return x
+
+class sigma_net(nn.Module):
+    def __init__(self, encoder, decoder, nh_mlp = 512, min_sigma_sq = 1e-4, max_sigma_sq = 1e-2):
+        super().__init__()
+        self.encoder = encoder
+        self.decoder = decoder
+        self.conv_s = nn.Conv2d(nh_mlp, 1, kernel_size=1, bias=True)
+        self.min = torch.log(torch.tensor(min_sigma_sq))
+        self.max = torch.log(torch.tensor(max_sigma_sq))
+        self.min.requires_grad = False
+        self.max.requires_grad = False
+
+    def forward(self, z):
+        with torch.no_grad():
+            x_bar = self.decoder(z)
+        x = self.encoder.get_feature(x_bar, grad=False)
+        x = self.conv_s(x).squeeze(2).squeeze(2)
+        x = torch.sigmoid(x)
+        x = torch.exp(self.min + (self.max - self.min) * x)
+        return x
+
+    def forward_with_x(self, x):
+        x = self.encoder.get_feature(x, grad=False)
+        x = self.conv_s(x).squeeze(2).squeeze(2)
+        x = torch.sigmoid(x)
+        x = torch.exp(self.min + (self.max - self.min) * x)
+        return x
+
 class ConvNet2FC(nn.Module):
     """additional 1x1 conv layer at the top"""
-    def __init__(self, in_chan=1, out_chan=64, nh=8, nh_mlp=512, out_activation='linear', use_spectral_norm=False):
+    def __init__(self, in_chan=1, out_chan=64, nh=8, nh_mlp=512, out_activation='linear'):
         """nh: determines the numbers of conv filters"""
         super(ConvNet2FC, self).__init__()
         self.conv1 = nn.Conv2d(in_chan, nh * 4, kernel_size=3, bias=True)
@@ -266,7 +316,6 @@ class ConvNet2FC(nn.Module):
         self.conv6 = nn.Conv2d(nh_mlp, out_chan, kernel_size=1, bias=True)
         self.in_chan, self.out_chan = in_chan, out_chan
         self.out_activation = get_activation(out_activation)
-
 
         layers = [self.conv1,
                   nn.ReLU(),
@@ -289,6 +338,37 @@ class ConvNet2FC(nn.Module):
 
     def forward(self, x):
         return self.net(x).squeeze(2).squeeze(2)
+
+    def get_feature(self, x, grad=False):
+        if grad:
+            x = self.conv1(x)
+            x = F.relu(x)
+            x = self.conv2(x)
+            x = F.relu(x)
+            x = self.max1(x)
+            x = self.conv3(x)
+            x = F.relu(x)
+            x = self.conv4(x)
+            x = F.relu(x)
+            x = self.max2(x)
+            x = self.conv5(x)
+            x = F.relu(x)
+        else:
+            with torch.no_grad():
+                x = self.conv1(x)
+                x = F.relu(x)
+                x = self.conv2(x)
+                x = F.relu(x)
+                x = self.max1(x)
+                x = self.conv3(x)
+                x = F.relu(x)
+                x = self.conv4(x)
+                x = F.relu(x)
+                x = self.max2(x)
+                x = self.conv5(x)
+                x = F.relu(x)
+        return x
+
 
 
 class DeConvNet2(nn.Module):

@@ -27,36 +27,35 @@ model:
     arch: deconv2
     nh: 8
     out_activation: sigmoid 
-  energy:
-    arch: fc_image
-    l_hidden: [256, 256, 256, 256, 256] # [256, 256, 256, 256]
-    activation: ['relu', 'relu', 'relu', 'relu', 'relu']
-    out_activation: 'linear'
-    out_chan_num: 1
-  sigma:
-    arch: fc_image
-    l_hidden: [256, 256, 256, 256, 256]
-    activation: ['relu', 'relu', 'relu', 'relu' , 'relu' ]
-    out_activation: 'sigmoid'
-    out_chan_num: 1
+  # energy:
+  #   arch: fc_image
+  #   l_hidden: [1024, 1024, 1024, 1024, 1024] # [256, 256, 256, 256]
+  #   activation: ['relu', 'relu', 'relu', 'relu', 'relu']
+  #   out_activation: 'linear'
+  #   out_chan_num: 1
+  # sigma:
+  #   arch: fc_image
+  #   l_hidden: [1024, 1024, 1024, 1024, 1024] # [256, 256, 256, 256, 256]
+  #   activation: ['relu', 'relu', 'relu', 'relu' , 'relu' ]
+  #   out_activation: 'sigmoid'
+  #   out_chan_num: 1
   x_dim: 1
-  z_dim: 32
+  z_dim: 15
   min_sigma_sq: 1e-4
   max_sigma_sq: 1e-2
   energy_ae:
     sigma_sq: 1e-2
-    reg: Null
     harmonic_pretrain: false
-    energy_detach: false
-    harmonic_detach: false
+    energy_detach: True
+    harmonic_detach: True
     conformal_detach: false
     train_sigma: True
   ebm:
-    gamma: 1.0
+    gamma: 0.01
     temperature: 0.01
     step_size: 0.001
     noise_scale: null
-    sample_step: 300
+    sample_step: 100
     buffer_size: 10000
     replay_ratio: 0.9
     langevin_clip_grad: Null
@@ -104,10 +103,10 @@ data:
   
 trainer: base
 training:
-  n_epoch: 100
+  n_epoch: 150
   n_epoch_pre: 100
-  n_epoch_ebm: 50
-  fix_decoder: True
+  n_epoch_ebm: 30
+  fix_decoder: false
   optimizer_pre:
     name: 'adam'
     lr: 1e-4

@@ -97,16 +97,14 @@ def get_ae(**model_cfg):
         decoder = get_net(in_dim=z_dim, out_dim=x_dim, **model_cfg["decoder"])
         model = IRVAE(encoder, IsotropicGaussian(decoder), iso_reg=iso_reg, metric=metric)
     elif arch == "eae":
-        from models.modules import normalized_net, sigma_net_normalizer
+        from models.modules import normalized_net, energy_net, sigma_net
         encoder = get_net(in_dim=x_dim, out_dim=z_dim+1, **model_cfg["encoder"])
-        encoder_pre = get_net(in_dim=x_dim, out_dim=z_dim+1, **model_cfg["encoder"])
         decoder = get_net(in_dim=z_dim+1, out_dim=x_dim, **model_cfg["decoder"])
-        sigma_net = get_net(in_dim=z_dim+1, out_dim= 1, **model_cfg["sigma"])
-        energy = get_net(in_dim=z_dim+1, out_dim=1, **model_cfg["energy"])
+        sigma = sigma_net(encoder, decoder, model_cfg["encoder"]["nh_mlp"], min_sigma_sq, max_sigma_sq)
+        energy = energy_net(encoder, decoder, model_cfg["encoder"]["nh_mlp"])
         from models.energy_based import EnergyBasedModel
         ebm = EnergyBasedModel(energy, **model_cfg["ebm"])
-        model = EnergyAE(normalized_net(encoder), normalized_net(encoder_pre), decoder, ebm, 
-                         sigma_net_normalizer(sigma_net, min_sigma_sq, max_sigma_sq), **model_cfg["energy_ae"])
+        model = EnergyAE(normalized_net(encoder), decoder, ebm, sigma, **model_cfg["energy_ae"])
     return model
 
 def get_model(cfg, *args, version=None, **kwargs):

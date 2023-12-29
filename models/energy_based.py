@@ -33,8 +33,11 @@ class EnergyBasedModel(nn.Module):
     def forward(self, x):
         return self.net(x).view(-1)
 
-    def predict(self, x):
-        return self(x)
+    def forward_with_grad(self, x):
+        return self.net(x, grad = True).view(-1)
+    
+    def forward_with_x(self, x):
+        return self.net.forward_with_x(x).view(-1)
 
     def validation_step(self, x, y=None):
         with torch.no_grad():
@@ -61,7 +64,7 @@ class EnergyBasedModel(nn.Module):
         x0 = self.buffer.sample(shape, device, replay = replay) # for HMC
         # x0 = self.buffer.sample(shape, device, replay=replay) # for langevin
         # run langevin
-        sample_x = sample_langevin(x = x0, model = self, stepsize = self.step_size, n_steps = sample_step,
+        sample_x = sample_langevin(x = x0, model = self.forward_with_grad, stepsize = self.step_size, n_steps = sample_step,
                                     temperature= self.temperature, noise_scale=self.noise_scale, 
                                     spherical=True, clip_grad=self.langevin_clip_grad)
         
@@ -78,7 +81,7 @@ class EnergyBasedModel(nn.Module):
         x0 = self.buffer.sample(shape, device, replay = replay) # for HMC
         # x0 = self.buffer.sample(shape, device, replay=replay) # for langevin
         # # run langevin
-        l_samples, l_dynamics, l_drift, l_diffusion = sample_langevin(x = x0, model = self, stepsize = self.step_size, n_steps = sample_step,
+        l_samples, l_dynamics, l_drift, l_diffusion = sample_langevin(x = x0, model = self.forward_with_grad, stepsize = self.step_size, n_steps = sample_step,
                                                                         temperature= self.temperature, noise_scale=self.noise_scale, 
                                                                         spherical=True, clip_grad=self.langevin_clip_grad, intermediate_samples=True)
         # # run hmc

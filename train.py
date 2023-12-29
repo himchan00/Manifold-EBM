@@ -78,14 +78,14 @@ def run(cfg, writer):
     logger = get_logger(cfg, writer)
     # torch.autograd.set_detect_anomaly(True)
     # Setup optimizer
-    optimizer_pre = get_optimizer(cfg.training.optimizer_pre, list(model.decoder.parameters()) + list(model.encoder_pre.parameters()))
+    optimizer_pre = get_optimizer(cfg.training.optimizer_pre, list(model.decoder.parameters()) + list(model.encoder.parameters()))
     import torch.optim as optim
     optimizer = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.training.optimizer['lr_encoder']},
                             #  {'params': model.decoder.parameters(), 'lr':cfg.training.optimizer['lr_decoder']},
                             # {'params': model.sigma_net.parameters(), 'lr': cfg.training.optimizer['lr_sigma']}
                             # {'params': model.ebm.parameters(), 'lr': cfg.training.optimizer['lr_energy']}
                             ])
-    optimizer_e = optim.Adam([{'params': model.ebm.parameters(), 'lr': cfg.training.optimizer['lr_energy']}])
+    optimizer_e = optim.Adam([{'params': model.ebm.net.conv_e.parameters(), 'lr': cfg.training.optimizer['lr_energy']}])
 
     # Setup Trainer
     trainer = get_trainer(optimizer, optimizer_pre, optimizer_e,  cfg)
