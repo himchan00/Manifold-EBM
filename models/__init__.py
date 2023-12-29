@@ -100,8 +100,8 @@ def get_ae(**model_cfg):
         from models.modules import normalized_net, energy_net, sigma_net
         encoder = get_net(in_dim=x_dim, out_dim=z_dim+1, **model_cfg["encoder"])
         decoder = get_net(in_dim=z_dim+1, out_dim=x_dim, **model_cfg["decoder"])
-        sigma = sigma_net(encoder, decoder, model_cfg["encoder"]["nh_mlp"], min_sigma_sq, max_sigma_sq)
-        energy = energy_net(encoder, decoder, model_cfg["encoder"]["nh_mlp"])
+        sigma = sigma_net(encoder, decoder, model_cfg["encoder"]["nh_mlp"], model_cfg["sigma"]["n_layers"], min_sigma_sq, max_sigma_sq)
+        energy = energy_net(encoder, decoder, model_cfg["encoder"]["nh_mlp"], model_cfg["energy"]["n_layers"])
         from models.energy_based import EnergyBasedModel
         ebm = EnergyBasedModel(energy, **model_cfg["ebm"])
         model = EnergyAE(normalized_net(encoder), decoder, ebm, sigma, **model_cfg["energy_ae"])

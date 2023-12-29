@@ -67,9 +67,9 @@ class EnergyAE(AE):
         if not pretrain:
             for params in self.decoder.parameters():
                 params.requires_grad = False
-            for params in self.ebm.net.conv_e.parameters():
+            for params in self.ebm.net.fc_nets.parameters():
                 params.requires_grad = False
-            for params in self.sigma.conv_s.parameters():
+            for params in self.sigma.fc_nets.parameters():
                 params.requires_grad = False
         optimizer_pre.zero_grad()
 
@@ -123,9 +123,9 @@ class EnergyAE(AE):
         if not pretrain:
             for params in self.decoder.parameters():
                 params.requires_grad = True
-            for params in self.ebm.net.conv_e.parameters():
+            for params in self.ebm.net.fc_nets.parameters():
                 params.requires_grad = True
-            for params in self.sigma.conv_s.parameters():
+            for params in self.sigma.fc_nets.parameters():
                 params.requires_grad = True
             
         if neg_sample:
