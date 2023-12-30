@@ -264,19 +264,19 @@ class energy_net(nn.Module):
         l_layer.append(nn.Linear(nh_mlp, 1))
         self.fc_nets = nn.Sequential(*l_layer)
 
-    def forward(self, z, grad = False):
-        if grad:
-            x_bar = self.decoder(z)
-            x = self.encoder.get_feature(x_bar, grad=True).squeeze(2).squeeze(2)
-            x = self.fc_nets(x)
-        else:
-            with torch.no_grad():
-                x_bar = self.decoder(z)
-            x = self.encoder.get_feature(x_bar, grad=False).squeeze(2).squeeze(2)
-            x = self.fc_nets(x)
+    def forward_for_energy(self, z):
+        x_bar = self.decoder(z)
+        x = self.encoder.get_feature(x_bar, grad=True).squeeze(2).squeeze(2)
+        x = self.fc_nets(x)
         return x
-    def forward_with_x(self, x):
-        x = self.encoder.get_feature(x, grad=False).squeeze(2).squeeze(2)
+    def forward(self, z, grad = True):
+        with torch.no_grad():
+            x_bar = self.decoder(z)
+        x = self.encoder.get_feature(x_bar, grad=grad).squeeze(2).squeeze(2)
+        x = self.fc_nets(x)
+        return x
+    def forward_with_x(self, x, grad=True):
+        x = self.encoder.get_feature(x, grad=grad).squeeze(2).squeeze(2)
         x = self.fc_nets(x)
         return x
 
@@ -296,17 +296,17 @@ class sigma_net(nn.Module):
         l_layer.append(nn.Linear(nh_mlp, 1))
         self.fc_nets = nn.Sequential(*l_layer)
 
-    def forward(self, z):
+    def forward(self, z, grad = True):
         with torch.no_grad():
             x_bar = self.decoder(z)
-        x = self.encoder.get_feature(x_bar, grad=False).squeeze(2).squeeze(2)
+        x = self.encoder.get_feature(x_bar, grad=grad).squeeze(2).squeeze(2)
         x = self.fc_nets(x)
         x = torch.sigmoid(x)
         x = torch.exp(self.min + (self.max - self.min) * x)
         return x
 
-    def forward_with_x(self, x):
-        x = self.encoder.get_feature(x, grad=False).squeeze(2).squeeze(2)
+    def forward_with_x(self, x, grad = True):
+        x = self.encoder.get_feature(x, grad=grad).squeeze(2).squeeze(2)
         x = self.fc_nets(x)
         x = torch.sigmoid(x)
         x = torch.exp(self.min + (self.max - self.min) * x)

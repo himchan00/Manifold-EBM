@@ -88,11 +88,11 @@ class EnergyAE(AE):
 
         pos_recon = ((recon - x) ** 2).view(len(x), -1).mean(dim=1)
         if not pretrain:
-            pos_e = self.ebm(z)/self.ebm.temperature
+            pos_e = self.ebm(z, False)/self.ebm.temperature
             pos_log_det_jacobian = get_log_det_jacobian(self.decoder,z, training=False, return_avg=False, create_graph=True)
             D = torch.prod(torch.tensor(x.shape[1:]))
             if self.train_sigma:
-                pos_sigma_sq = self.sigma(z).view(-1)
+                pos_sigma_sq = self.sigma(z, False).view(-1)
             else:
                 pos_sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
             total_pos_e = ((pos_recon)/(2 * pos_sigma_sq) + torch.log(pos_sigma_sq)/2 + (pos_log_det_jacobian + pos_e)/D)
@@ -150,12 +150,12 @@ class EnergyAE(AE):
 
     def train_step(self, x, optimizer, **kwargs):
 
-        for params in self.encoder.parameters():
-            params.requires_grad = False
+        # for params in self.encoder.parameters():
+        #     params.requires_grad = False
 
 
         optimizer.zero_grad()
-        z = self.encode(x)
+        z = self.encode(x).detach().clone()
         # if self.conformal_detach:
         #     z_c = z.detach().clone()
         # else:
@@ -172,7 +172,7 @@ class EnergyAE(AE):
         else:
             sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
         neg_x = self.decode(neg_z_sample).detach().clone() + torch.randn_like(x) * torch.sqrt(sigma_sq).unsqueeze(1).unsqueeze(1)
-        neg_z = self.encode(neg_x)
+        neg_z = self.encode(neg_x).detach().clone()
 
         recon = self.decode(z)
         recon_neg = self.decode(neg_z)
@@ -184,7 +184,7 @@ class EnergyAE(AE):
 
         if self.train_sigma:
             pos_sigma_sq = self.sigma.forward_with_x(x_bar).view(-1)
-            neg_sigma_sq = self.sigma.forward_with_x(x_bar).view(-1)
+            neg_sigma_sq = self.sigma.forward_with_x(neg_x_bar).view(-1)
         else:
             pos_sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
             neg_sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
@@ -212,8 +212,8 @@ class EnergyAE(AE):
         loss.backward()
         optimizer.step()
 
-        for params in self.encoder.parameters():
-            params.requires_grad = True
+        # for params in self.encoder.parameters():
+        #     params.requires_grad = True
 
 
         return {"loss": loss.item(), #"reg_loss": reg_loss.item(), 

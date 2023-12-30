@@ -28,9 +28,9 @@ model:
     nh: 8
     out_activation: sigmoid 
   energy:
-    n_layers: 3
+    n_layers: 2
   sigma:
-    n_layers: 3
+    n_layers: 2
   # energy:
   #   arch: fc_image
   #   l_hidden: [1024, 1024, 1024, 1024, 1024] # [256, 256, 256, 256]

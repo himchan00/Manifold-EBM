@@ -65,21 +65,21 @@ class BaseTrainer:
         
         # torch.save(model.encoder.state_dict(), "pretrained/encoder_ho_1_z_dim_15.pth")
         # torch.save(model.decoder.state_dict(), "pretrained/decoder_ho_1_z_dim_15.pth")
-        for i_epoch in range(1, cfg['n_epoch_ebm'] + 1):
-            for x, _ in train_loader:
-                model.train()
-                d_train = model.train_energy_step(x.to(self.device), optimizer_e=self.optimizer_e, **kwargs)
-                logger.process_iter_train(d_train)  
-                if i_iter % cfg.print_interval == 0:
-                    print(f'Pretraining_ebm: {i_iter}', d_train['loss'])
-                    logger.add_val(i_iter, d_train)
+        # for i_epoch in range(1, cfg['n_epoch_ebm'] + 1):
+        #     for x, _ in train_loader:
+        #         model.train()
+        #         d_train = model.train_energy_step(x.to(self.device), optimizer_e=self.optimizer_e, **kwargs)
+        #         logger.process_iter_train(d_train)  
+        #         if i_iter % cfg.print_interval == 0:
+        #             print(f'Pretraining_ebm: {i_iter}', d_train['loss'])
+        #             logger.add_val(i_iter, d_train)
                    
-                if i_iter % cfg.visualize_interval == 0:
-                    d_val = model.visualization_step(train_loader, procedure = "train_energy", device=self.device)
-                    logger.add_val(i_iter, d_val)
-                i_iter += 1
-        torch.save(model.ebm.net.fc_nets.state_dict(), "pretrained/ebm_ho_1_z_dim_15.pth")
-        # model.ebm.net.fc_nets.load_state_dict(torch.load("pretrained/ebm_conv_layer.pth"))
+        #         if i_iter % cfg.visualize_interval == 0:
+        #             d_val = model.visualization_step(train_loader, procedure = "train_energy", device=self.device)
+        #             logger.add_val(i_iter, d_val)
+        #         i_iter += 1
+        # torch.save(model.ebm.net.fc_nets.state_dict(), "pretrained/ebm_ho_1_z_dim_15.pth")
+        model.ebm.net.fc_nets.load_state_dict(torch.load("pretrained/ebm_ho_1_z_dim_15.pth"))
         import torch.optim as optim
         if not cfg['fix_decoder']:
             self.optimizer_pre = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
@@ -87,7 +87,7 @@ class BaseTrainer:
                             ])
             
             if model.train_sigma:
-                optimizer = optim.Adam([# 'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
+                optimizer = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
                                         {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
                                         {'params': model.sigma.fc_nets.parameters(), 'lr': cfg.optimizer['lr_sigma']},
                                         {'params': model.ebm.net.fc_nets.parameters(), 'lr': cfg.optimizer['lr_energy']}
@@ -122,7 +122,7 @@ class BaseTrainer:
 
                 if model.train_sigma:
                     d_train_t, _ = model.train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
-                    for _ in range(5):
+                    for _ in range(3):
                         neg_x = model.sample(shape = z_shape, sample_step = model.ebm.sample_step,
                                                     device = self.device, replay = model.ebm.replay, apply_noise = True)
                     #d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
