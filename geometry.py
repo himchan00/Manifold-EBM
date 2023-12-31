@@ -41,30 +41,26 @@ def relaxed_volume_preserving_measure(func, z, eta=0.2, create_graph=True):
     if eta is not None:
         alpha = (torch.rand(bs) * (1 + 2*eta) - eta).unsqueeze(1).to(z)
         z_augmented = (alpha*z + (1-alpha)*z_perm)
-        # z_augmented = z_augmented / z_augmented.norm(dim=-1, keepdim=True)
+        z_augmented = z_augmented / z_augmented.norm(dim=-1, keepdim=True)
     else:
         z_augmented = z
     bs, n = z.shape[0], z.shape[1]
     # Projection matrix
-    # X = z_augmented.unsqueeze(2).to(z)
-    # X_t = X.permute(0, 2, 1).to(z)
-    # P = torch.eye(n).repeat(bs, 1, 1).to(z) - torch.bmm(X, X_t).to(z)
-    # J = jacobian_of_f(func, z_augmented, create_graph=create_graph)
-    # JP = torch.bmm(J, P)
-    # pullback_metric = JP.permute(0, 2, 1)@JP
+    X = z_augmented.unsqueeze(2).to(z)
+    X_t = X.permute(0, 2, 1).to(z)
+    P = torch.eye(n).repeat(bs, 1, 1).to(z) - torch.bmm(X, X_t).to(z)
     J = jacobian_of_f(func, z_augmented, create_graph=create_graph)
-    pullback_metric = J.permute(0, 2, 1)@J
+    JP = torch.bmm(J, P)
+    pullback_metric = JP.permute(0, 2, 1)@JP
+    # J = jacobian_of_f(func, z_augmented, create_graph=create_graph)
+    # pullback_metric = J.permute(0, 2, 1)@J
     eig_vals = torch.linalg.eigvalsh(pullback_metric)
-    # eig_vals = eig_vals[:, 1:]
-    det = torch.prod(eig_vals, dim=1)
-    det_sq = det**2
-    det_sq_mean = det_sq.mean()
-    det_mean = det.mean()
-    if det_mean.min() < 1e-12:
-        print("det_mean is too small")
-        return torch.tensor(0.0).to(z)
-    
-    return det_sq_mean/det_mean**2
+    eig_vals = eig_vals[:, 1:]
+    logdet = torch.log(eig_vals).sum(dim=1)
+    logdet_sq = logdet**2
+    logdet_sq_mean = logdet_sq.mean()
+    logdet_mean = logdet.mean()
+    return logdet_sq_mean/logdet_mean**2
 
 
 def get_log_det_jacobian(f, z_samples, return_avg=True, training=True, create_graph=True):
@@ -96,8 +92,8 @@ def get_log_det_jacobian(f, z_samples, return_avg=True, training=True, create_gr
         # pullback_metric = J.permute(0, 2, 1)@J
         # eig_vals = torch.linalg.eigvalsh(pullback_metric)
         logdet = torch.log(eig_vals).sum(dim=1)
-        logdet[torch.isnan(logdet)] = 0
-        logdet[torch.isinf(logdet)] = 0
+        # logdet[torch.isnan(logdet)] = 0
+        # logdet[torch.isinf(logdet)] = 0
     if return_avg:
         return logdet.mean()/2.0
     else:

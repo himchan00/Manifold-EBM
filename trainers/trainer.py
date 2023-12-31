@@ -18,7 +18,10 @@ class BaseTrainer:
 
     def train(self, model, d_dataloaders, logger=None, logdir=""):
         cfg = self.training_cfg
-    
+        import torch.optim as optim
+        optimizer_reg = optim.Adam([{'params': model.encoder.parameters(), 'lr': 1e-5},
+                                    {'params': model.decoder.parameters(), 'lr': 1e-5}
+                        ])
         time_meter = averageMeter()
         train_loader, val_loader, test_loader = (d_dataloaders["training"], d_dataloaders["validation"], d_dataloaders["test"])
         OOD_val_loader, OOD_test_loader = (d_dataloaders["OOD_validation"], d_dataloaders["OOD_test"])
@@ -34,10 +37,13 @@ class BaseTrainer:
         #     for x, _ in train_loader:
         #         model.train()
         #         d_train = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, **kwargs)
+        #         d_train_reg = model.regularization_step(x.to(self.device), optimizer_reg=optimizer_reg, **kwargs)
         #         logger.process_iter_train(d_train)
         #         if i_iter % cfg.print_interval == 0:
-        #             print(f'Pretraining_AE: {i_iter}', d_train['loss'])
+        #             print(f'Pretraining_AE: {i_iter}')
+        #             print(f'loss: {d_train["loss"]}, loss_reg: {d_train_reg["AE/reg_loss"]}')
         #             logger.add_val(i_iter, d_train)
+        #             logger.add_val(i_iter, d_train_reg)
         #         if i_iter % cfg.val_interval == 0:
         #             in_pred = self.predict(model, val_loader, self.device)
         #             ood1_pred = self.predict(model, OOD_val_loader, self.device)
@@ -63,8 +69,8 @@ class BaseTrainer:
         #             logger.add_val(i_iter, d_val)                   
         #         i_iter += 1 # added
         
-        # torch.save(model.encoder.state_dict(), "pretrained/encoder_ho_1_z_dim_15.pth")
-        # torch.save(model.decoder.state_dict(), "pretrained/decoder_ho_1_z_dim_15.pth")
+        # torch.save(model.encoder.state_dict(), "pretrained/encoder_ho_1_z_dim_15_reg.pth")
+        # torch.save(model.decoder.state_dict(), "pretrained/decoder_ho_1_z_dim_15_reg.pth")
         # for i_epoch in range(1, cfg['n_epoch_ebm'] + 1):
         #     for x, _ in train_loader:
         #         model.train()
@@ -78,16 +84,15 @@ class BaseTrainer:
         #             d_val = model.visualization_step(train_loader, procedure = "train_energy", device=self.device)
         #             logger.add_val(i_iter, d_val)
         #         i_iter += 1
-        # torch.save(model.ebm.net.fc_nets.state_dict(), "pretrained/ebm_ho_1_z_dim_15.pth")
+        # torch.save(model.ebm.net.fc_nets.state_dict(), "pretrained/ebm_ho_1_z_dim_15_reg.pth")
         model.ebm.net.fc_nets.load_state_dict(torch.load("pretrained/ebm_ho_1_z_dim_15.pth"))
-        import torch.optim as optim
         if not cfg['fix_decoder']:
             self.optimizer_pre = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
                                            # {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']}
                             ])
             
             if model.train_sigma:
-                optimizer = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
+                optimizer = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_energy']},
                                         {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
                                         {'params': model.sigma.fc_nets.parameters(), 'lr': cfg.optimizer['lr_sigma']},
                                         {'params': model.ebm.net.fc_nets.parameters(), 'lr': cfg.optimizer['lr_energy']}
@@ -121,12 +126,12 @@ class BaseTrainer:
                 start_ts = time.time()
 
                 if model.train_sigma:
-                    d_train_t, _ = model.train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
-                    for _ in range(3):
-                        neg_x = model.sample(shape = z_shape, sample_step = model.ebm.sample_step,
+                    neg_x = model.sample(shape = z_shape, sample_step = model.ebm.sample_step,
                                                     device = self.device, replay = model.ebm.replay, apply_noise = True)
-                    #d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
-                        d_train_p_neg = model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False,neg_sample = True, **kwargs)
+                    d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
+                    d_train_p_neg = model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False,neg_sample = True, **kwargs)
+                    d_train_t, _ = model.train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
+                    d_train_reg = model.regularization_step(x.to(self.device), optimizer_reg=optimizer_reg, **kwargs)
                 else:
                     d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
                 # d_train_e = model.train_energy_step(x.to(self.device), optimizer_e=self.optimizer_e, pretrain = False, **kwargs)    
@@ -143,8 +148,9 @@ class BaseTrainer:
                     logger.add_val(i_iter, d_train)
                     if model.train_sigma:
                         logger.add_val(i_iter, d_train_t)
-                        # logger.add_val(i_iter, d_train_p)
+                        logger.add_val(i_iter, d_train_p)
                         logger.add_val(i_iter, d_train_p_neg)
+                        logger.add_val(i_iter, d_train_reg)
                     else:
                         logger.add_val(i_iter,d_train_p)
 

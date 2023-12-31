@@ -115,7 +115,7 @@ training:
     name: 'adam'
     lr: 1e-4
   optimizer:
-    lr_encoder: 1e-5
+    lr_encoder: 1e-4
     lr_encoder_pre: 1e-4
     lr_decoder: 1e-5
     lr_energy: 1e-5

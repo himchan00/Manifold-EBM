@@ -62,7 +62,15 @@ class EnergyAE(AE):
         self.train_sigma = train_sigma
         self.sigma = sigma
 
-    
+    def regularization_step(self, x, optimizer_reg, **kwargs):
+        optimizer_reg.zero_grad()
+        z = self.encode(x)
+        loss = relaxed_volume_preserving_measure(self.decoder, z, eta=0.2)
+        loss.backward()
+        optimizer_reg.step()
+        return {"AE/iso_loss_": loss.item()}
+
+
     def pretrain_step(self, x, optimizer_pre, pretrain  = True, neg_sample = False, **kwargs):
         if not pretrain:
             for params in self.decoder.parameters():
