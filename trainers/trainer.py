@@ -19,8 +19,8 @@ class BaseTrainer:
     def train(self, model, d_dataloaders, logger=None, logdir=""):
         cfg = self.training_cfg
         import torch.optim as optim
-        optimizer_reg = optim.Adam([{'params': model.encoder.parameters(), 'lr': 1e-5},
-                                    {'params': model.decoder.parameters(), 'lr': 1e-5}
+        optimizer_reg = optim.Adam([{'params': model.encoder.parameters(), 'lr': 1e-6},
+                                    {'params': model.decoder.parameters(), 'lr': 1e-6}
                         ])
         time_meter = averageMeter()
         train_loader, val_loader, test_loader = (d_dataloaders["training"], d_dataloaders["validation"], d_dataloaders["test"])
@@ -41,7 +41,7 @@ class BaseTrainer:
         #         logger.process_iter_train(d_train)
         #         if i_iter % cfg.print_interval == 0:
         #             print(f'Pretraining_AE: {i_iter}')
-        #             print(f'loss: {d_train["loss"]}, loss_reg: {d_train_reg["AE/reg_loss"]}')
+        #             print(f'loss: {d_train["loss"]}, loss_reg: {d_train_reg["AE/iso_loss_"]}')
         #             logger.add_val(i_iter, d_train)
         #             logger.add_val(i_iter, d_train_reg)
         #         if i_iter % cfg.val_interval == 0:
@@ -128,10 +128,13 @@ class BaseTrainer:
                 if model.train_sigma:
                     neg_x = model.sample(shape = z_shape, sample_step = model.ebm.sample_step,
                                                     device = self.device, replay = model.ebm.replay, apply_noise = True)
+                    d_train_reg = model.regularization_step(x.to(self.device), optimizer_reg=optimizer_reg, **kwargs)
+                    d_train_reg_neg = model.regularization_step(neg_x.to(self.device), optimizer_reg=optimizer_reg, neg_sample = True, **kwargs)
+                    neg_x = model.sample(shape = z_shape, sample_step = model.ebm.sample_step,
+                                                    device = self.device, replay = model.ebm.replay, apply_noise = True)
                     d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
                     d_train_p_neg = model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False,neg_sample = True, **kwargs)
                     d_train_t, _ = model.train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
-                    d_train_reg = model.regularization_step(x.to(self.device), optimizer_reg=optimizer_reg, **kwargs)
                 else:
                     d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
                 # d_train_e = model.train_energy_step(x.to(self.device), optimizer_e=self.optimizer_e, pretrain = False, **kwargs)    
@@ -151,6 +154,7 @@ class BaseTrainer:
                         logger.add_val(i_iter, d_train_p)
                         logger.add_val(i_iter, d_train_p_neg)
                         logger.add_val(i_iter, d_train_reg)
+                        logger.add_val(i_iter, d_train_reg_neg)
                     else:
                         logger.add_val(i_iter,d_train_p)
 
