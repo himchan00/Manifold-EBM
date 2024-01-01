@@ -159,7 +159,7 @@ class EnergyAE(AE):
         return {"loss": loss.item(), "EBM/pos_e_": pos_e.mean().item(), "EBM/neg_e_": neg_e.mean().item()}
     
 
-    def train_step(self, x, optimizer, **kwargs):
+    def train_step(self, x, optimizer, neg_x = None, **kwargs):
 
         # for params in self.encoder.parameters():
         #     params.requires_grad = False
@@ -174,15 +174,8 @@ class EnergyAE(AE):
 
         # ebm training
         # energy_loss, _, pos_e, neg_e, _, neg_z_sample = self.ebm.energy_loss(z_e)
-        neg_z_sample = self.ebm.sample(shape=z.shape, sample_step = self.ebm.sample_step, device=z.device, replay=self.ebm.replay)
-        # neg_z_sample = torch.randn_like(z)
-        # neg_x = self.decode(neg_z_sample).detach().clone() + torch.randn_like(x) * (self.sigma_sq**(1/2))
-        if self.train_sigma:
-            sigma_sq = (self.sigma(neg_z_sample).detach().clone())
-            # sigma_sq = (self.sigma(neg_z_sample.detach().clone()))
-        else:
-            sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
-        neg_x = self.decode(neg_z_sample).detach().clone() + torch.randn_like(x) * torch.sqrt(sigma_sq).unsqueeze(1).unsqueeze(1)
+        if neg_x is None:
+            neg_x = self.sample(shape=z.shape, sample_step = self.ebm.sample_step, device=z.device, replay=self.ebm.replay)
         neg_z = self.encode(neg_x).detach().clone()
 
         recon = self.decode(z)
@@ -190,12 +183,12 @@ class EnergyAE(AE):
 
         x_bar = recon.detach().clone()
         neg_x_bar = recon_neg.detach().clone()
-        pos_e = self.ebm.forward_with_x(x_bar)/self.ebm.temperature
-        neg_e = self.ebm.forward_with_x(neg_x_bar)/self.ebm.temperature
+        pos_e = self.ebm.forward_with_x(x_bar, False)/self.ebm.temperature
+        neg_e = self.ebm.forward_with_x(neg_x_bar, False)/self.ebm.temperature
 
         if self.train_sigma:
-            pos_sigma_sq = self.sigma.forward_with_x(x_bar).view(-1)
-            neg_sigma_sq = self.sigma.forward_with_x(neg_x_bar).view(-1)
+            pos_sigma_sq = self.sigma.forward_with_x(x_bar, False).view(-1)
+            neg_sigma_sq = self.sigma.forward_with_x(neg_x_bar, False).view(-1)
         else:
             pos_sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
             neg_sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
@@ -241,7 +234,7 @@ class EnergyAE(AE):
                 
         }, neg_x.detach().clone()
     
-    def sample(self, shape, sample_step, device, replay=True, apply_noise = False):
+    def sample(self, shape, sample_step, device, replay=True, apply_noise = True):
         # sample from latent space
         z = self.ebm.sample(shape=shape, sample_step = sample_step, device=device, replay=replay)
         # decode
@@ -369,6 +362,7 @@ class EnergyAE(AE):
             else:
                 return {
                     'input@': torch.clip(x_img, min=0, max=1),
+                    'recon@': torch.clip(recon_img, min=0, max=1),
                 }
         else:
             if procedure == 'train_energy' or procedure == "train":  
@@ -380,6 +374,7 @@ class EnergyAE(AE):
             else:
                 return {
                     'input@': torch.clip(x_img, min=0, max=1),
+                    'recon@': torch.clip(recon_img, min=0, max=1),
                 }   
 
 class VAE(AE):

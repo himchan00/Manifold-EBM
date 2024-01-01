@@ -49,8 +49,8 @@ class EnergyBasedModel(nn.Module):
 
     def energy_loss(self, x):
         neg_x = self.sample(shape=x.shape, sample_step= self.sample_step, device=x.device, replay=self.replay)
-        pos_e = self(x)/self.temperature
-        neg_e = self(neg_x)/self.temperature
+        pos_e = self(x, False)/self.temperature
+        neg_e = self(neg_x, False)/self.temperature
 
         ebm_loss = pos_e.mean() - neg_e.mean()
         reg_loss = (pos_e ** 2).mean() + (neg_e ** 2).mean()
