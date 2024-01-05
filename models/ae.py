@@ -78,10 +78,10 @@ class EnergyAE(AE):
         if not pretrain:
             for params in self.decoder.parameters():
                 params.requires_grad = False
-            for params in self.ebm.net.fc_nets.parameters():
-                params.requires_grad = False
-            for params in self.sigma.fc_nets.parameters():
-                params.requires_grad = False
+            # for params in self.ebm.net.fc_nets.parameters():
+            #     params.requires_grad = False
+            # for params in self.sigma.fc_nets.parameters():
+            #     params.requires_grad = False
         optimizer_pre.zero_grad()
 
         z = self.encode(x)
@@ -134,10 +134,10 @@ class EnergyAE(AE):
         if not pretrain:
             for params in self.decoder.parameters():
                 params.requires_grad = True
-            for params in self.ebm.net.fc_nets.parameters():
-                params.requires_grad = True
-            for params in self.sigma.fc_nets.parameters():
-                params.requires_grad = True
+            # for params in self.ebm.net.fc_nets.parameters():
+            #     params.requires_grad = True
+            # for params in self.sigma.fc_nets.parameters():
+            #     params.requires_grad = True
             
         if neg_sample:
             return {"loss": loss.item(), "AE/pretrain_neg_recon_": pos_recon.mean().item(),}

@@ -45,8 +45,8 @@ model:
   #   out_chan_num: 1
   x_dim: 1
   z_dim: 15
-  min_sigma_sq: 1e-4
-  max_sigma_sq: 1e-2
+  min_sigma_sq: 1e-5
+  max_sigma_sq: 1e-1
   energy_ae:
     sigma_sq: 1e-2
     harmonic_pretrain: false
@@ -55,13 +55,13 @@ model:
     conformal_detach: false
     train_sigma: True
   ebm:
-    gamma: 0.01
+    gamma: 0.0
     temperature: 0.01
     step_size: 0.001
     noise_scale: null
     sample_step: 100
     buffer_size: 10000
-    replay_ratio: 0.9
+    replay_ratio: 0.95
     langevin_clip_grad: Null
 data:
   training:
@@ -117,9 +117,9 @@ training:
   optimizer:
     lr_encoder: 1e-4
     lr_encoder_pre: 1e-4
-    lr_decoder: 1e-5
-    lr_energy: 1e-5
-    lr_sigma: 1e-5
+    lr_decoder: 3e-5
+    lr_energy: 3e-5
+    lr_sigma: 3e-5
   print_interval: 200
   val_interval: 200
   visualize_interval: 200

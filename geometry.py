@@ -92,8 +92,8 @@ def get_log_det_jacobian(f, z_samples, return_avg=True, training=True, create_gr
         # pullback_metric = J.permute(0, 2, 1)@J
         # eig_vals = torch.linalg.eigvalsh(pullback_metric)
         logdet = torch.log(eig_vals).sum(dim=1)
-        # logdet[torch.isnan(logdet)] = 0
-        # logdet[torch.isinf(logdet)] = 0
+        logdet[torch.isnan(logdet)] = 0
+        logdet[torch.isinf(logdet)] = 0
     if return_avg:
         return logdet.mean()/2.0
     else:
