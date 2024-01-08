@@ -132,8 +132,8 @@ class BaseTrainer:
                 d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
                 z_given_x = sample_langevin_z_given_x(x.to(self.device), energy = None, 
                                                                 sigma = model.sigma, decoder = model.decoder, 
-                                                                encoder = model.encoder, stepsize = 3e-8, 
-                                                                n_steps = 30, temperature = 1e-2, spherical=False)
+                                                                encoder = model.encoder, stepsize = model.ebm.stepsize, 
+                                                                n_steps = model.ebm.sample_step, temperature = 1e-2, spherical=False)
                 
                 # neg_x = model.sample(shape = z_shape, sample_step = model.ebm.sample_step,
                 #                                 device = self.device, replay = model.ebm.replay)
@@ -245,8 +245,8 @@ class BaseTrainer:
             for i in range(1):
                 z_given_x = sample_langevin_z_given_x(x.to(device), energy = None, 
                                                     sigma = m.sigma, decoder = m.decoder, 
-                                                    encoder = m.encoder, stepsize = 3e-8, 
-                                                    n_steps = 30, temperature = 1e-2, spherical=False)
+                                                    encoder = m.encoder, stepsize = m.ebm.stepsize, 
+                                                    n_steps = m.ebm.sample_step, temperature = 1e-2, spherical=False)
                 with torch.no_grad():
                     if flatten:
                         x = x.view(len(x), -1)

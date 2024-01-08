@@ -57,9 +57,9 @@ model:
   ebm:
     gamma: 0.001
     temperature: 0.01
-    step_size: 0.001
+    step_size: 1e-8
     noise_scale: null
-    sample_step: 100
+    sample_step: 30
     buffer_size: 10000
     replay_ratio: 0.95
     langevin_clip_grad: Null
@@ -71,7 +71,7 @@ data:
     n_workers: 4
     split: training
     shuffle: True
-    digits: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    digits: [0, 1, 2, 4, 5, 6, 7, 8, 9]
   validation:
     dataset: MNIST
     root: dataset
@@ -79,7 +79,7 @@ data:
     n_workers: 4
     split: validation
     shuffle: False
-    digits: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    digits: [0, 1, 2, 4, 5, 6, 7, 8, 9]
   test:
     dataset: MNIST
     root: dataset
@@ -87,7 +87,7 @@ data:
     n_workers: 4
     split: test
     shuffle: False
-    digits: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    digits: [0, 1, 2, 4, 5, 6, 7, 8, 9]
   OOD_validation:
     dataset: MNIST
     root: dataset
@@ -95,7 +95,7 @@ data:
     n_workers: 4
     split: validation
     shuffle: False
-    digits: [9]
+    digits: [3]
   OOD_test:
     dataset: MNIST
     root: dataset
@@ -103,7 +103,7 @@ data:
     n_workers: 4
     split: test
     shuffle: False
-    digits: [9]
+    digits: [3]
   
 trainer: base
 training:
@@ -117,9 +117,9 @@ training:
   optimizer:
     lr_encoder: 1e-4
     lr_encoder_pre: 1e-4
-    lr_decoder: 3e-5
+    lr_decoder: 1e-4
     lr_energy: 3e-5
-    lr_sigma: 3e-5
+    lr_sigma: 1e-5
   print_interval: 200
   val_interval: 200
   visualize_interval: 200

@@ -306,8 +306,8 @@ class EnergyAE(AE):
         recon = self.decode(z)
         z_given_x = sample_langevin_z_given_x(x.to(device), energy = None, 
                                                 sigma = self.sigma, decoder = self.decoder, 
-                                                encoder = self.encoder, stepsize = 3e-8, 
-                                                n_steps = 30, temperature = 1e-2, spherical=False)
+                                                encoder = self.encoder, stepsize = self.ebm.stepsize, 
+                                                n_steps = self.ebm.sample_step, temperature = 1e-2, spherical=False)
         x_given_z = self.decode(z_given_x)
         x_given_z_img = make_grid(x_given_z.detach().cpu(), nrow=num_each_axis, value_range=(0, 1), pad_value=1)
         x_img = make_grid(x.detach().cpu(), nrow=num_each_axis, value_range=(0, 1), pad_value=1)
