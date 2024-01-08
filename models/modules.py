@@ -296,6 +296,12 @@ class sigma_net(nn.Module):
         l_layer.append(nn.Linear(nh_mlp, 1))
         self.fc_nets = nn.Sequential(*l_layer)
 
+    def forward_for_energy(self, z):
+        x_bar = self.decoder(z)
+        x = self.encoder.get_feature(x_bar, grad=True).squeeze(2).squeeze(2)
+        x = self.fc_nets(x)
+        return x
+    
     def forward(self, z, grad = True):
         with torch.no_grad():
             x_bar = self.decoder(z)

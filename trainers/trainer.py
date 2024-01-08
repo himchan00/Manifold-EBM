@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from metrics import averageMeter
 from utils.utils import roc_btw_arr
+from models.energy_based import sample_langevin_z_given_x
 
 class BaseTrainer:
     """Trainer for a conventional iterative training of model for classification"""
@@ -67,8 +68,8 @@ class BaseTrainer:
         #             logger.add_val(i_iter, d_val)                   
         #         i_iter += 1 # added
         
-        # torch.save(model.encoder.state_dict(), "pretrained/encoder_ho_9_z_dim_15.pth")
-        # torch.save(model.decoder.state_dict(), "pretrained/decoder_ho_9_z_dim_15.pth")
+        # torch.save(model.encoder.state_dict(), "pretrained/encoder_ho_3_z_dim_15_epoch_30.pth")
+        # torch.save(model.decoder.state_dict(), "pretrained/decoder_ho_3_z_dim_15_epoch_30.pth")
         # for i_epoch in range(1, cfg['n_epoch_ebm'] + 1):
         #     for x, _ in train_loader:
         #         model.train()
@@ -82,7 +83,7 @@ class BaseTrainer:
         #             d_val = model.visualization_step(train_loader, procedure = "train_energy", device=self.device)
         #             logger.add_val(i_iter, d_val)
         #         i_iter += 1
-        # torch.save(model.ebm.net.fc_nets.state_dict(), "pretrained/ebm_ho_9_z_dim_15.pth")
+        # torch.save(model.ebm.net.fc_nets.state_dict(), "pretrained/ebm_ho_9_z_dim_15_epoch_10.pth")
         model.ebm.net.fc_nets.load_state_dict(torch.load("pretrained/ebm_ho_9_z_dim_15.pth"))
         if not cfg['fix_decoder']:
             self.optimizer_pre = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
@@ -121,11 +122,6 @@ class BaseTrainer:
         model.ebm.net.decoder = copy.deepcopy(model.decoder)
         model.sigma.encoder = copy.deepcopy(model.encoder.net)
         model.sigma.decoder = copy.deepcopy(model.decoder)
-        # disable bias training for energy
-        for key, value in model.ebm.net.fc_nets.named_parameters():
-            if key == '2.bias':
-                print(f"disable bias training for final layer of energy, layer name:{key}")
-                value.requires_grad = False
 
         self.optimizer = optimizer
         for i_epoch in range(1, cfg['n_epoch'] + 1):
@@ -133,18 +129,23 @@ class BaseTrainer:
                 model.train()
                 start_ts = time.time()
 
-                if model.train_sigma:
-                    neg_x = model.sample(shape = z_shape, sample_step = model.ebm.sample_step,
-                                                    device = self.device, replay = model.ebm.replay)
-                    #d_train_reg = model.regularization_step(x.to(self.device), optimizer_reg=optimizer_reg, **kwargs)
-                    #d_train_reg_neg = model.regularization_step(neg_x.to(self.device), optimizer_reg=optimizer_reg, neg_sample = True, **kwargs)
-                    # neg_x = model.sample(shape = z_shape, sample_step = model.ebm.sample_step,
-                    #                                 device = self.device, replay = model.ebm.replay, apply_noise = True)
-                    d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
-                    d_train_p_neg = model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False,neg_sample = True, **kwargs)
-                    d_train_t, _ = model.train_step(x.to(self.device), optimizer=self.optimizer, neg_x = neg_x, **kwargs)
-                else:
-                    d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
+                d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
+                z_given_x = sample_langevin_z_given_x(x.to(self.device), energy = model.ebm.net, 
+                                                                sigma = model.sigma, decoder = model.decoder, 
+                                                                encoder = model.encoder, stepsize = 3e-8, 
+                                                                n_steps = 20, temperature = 1e-2, spherical=True)
+                
+                # neg_x = model.sample(shape = z_shape, sample_step = model.ebm.sample_step,
+                #                                 device = self.device, replay = model.ebm.replay)
+                #d_train_reg = model.regularization_step(x.to(self.device), optimizer_reg=optimizer_reg, **kwargs)
+                #d_train_reg_neg = model.regularization_step(neg_x.to(self.device), optimizer_reg=optimizer_reg, neg_sample = True, **kwargs)
+                # neg_x = model.sample(shape = z_shape, sample_step = model.ebm.sample_step,
+                #                                 device = self.device, replay = model.ebm.replay, apply_noise = True)
+                
+                # d_train_p_neg = model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False,neg_sample = True, **kwargs)
+                d_train_t = model.new_train_step(x.to(self.device), z_given_x.to(self.device), optimizer=self.optimizer, **kwargs)
+                # else:
+                #     d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
                 # d_train_e = model.train_energy_step(x.to(self.device), optimizer_e=self.optimizer_e, pretrain = False, **kwargs)    
                 # update target network
                 tau = 0.005
@@ -168,7 +169,7 @@ class BaseTrainer:
                     if model.train_sigma:
                         logger.add_val(i_iter, d_train_t)
                         logger.add_val(i_iter, d_train_p)
-                        logger.add_val(i_iter, d_train_p_neg)
+                        # logger.add_val(i_iter, d_train_p_neg)
                         #logger.add_val(i_iter, d_train_reg)
                         #logger.add_val(i_iter, d_train_reg_neg)
                     else:
@@ -178,25 +179,27 @@ class BaseTrainer:
 
                 model.eval()
                 if i_iter % cfg.val_interval == 0:
-                    in_pred = self.predict(model, val_loader, self.device)
-                    ood1_pred = self.predict(model, OOD_val_loader, self.device)
-                    for key, val in in_pred.items():
-                        auc_val = roc_btw_arr(ood1_pred[key], val)
-                        print(f'AUC_val({key}): ', auc_val)
-                        print(f'mean_in: {val.mean()}, mean_ood: {ood1_pred[key].mean()}')
-                        logger.add_val(i_iter, {f'validation/auc/{key}_': auc_val})
-                        logger.add_val(i_iter, {f'validation/mean_in/{key}_': val.mean()})
-                        logger.add_val(i_iter, {f'validation/mean_ood/{key}_': ood1_pred[key].mean()})
+                    in_pred, in_mean_var = self.predict_new(model, val_loader, self.device)
+                    ood1_pred, out_mean_var = self.predict_new(model, OOD_val_loader, self.device)
+                    auc_val = roc_btw_arr(ood1_pred, in_pred)
+                    print(f'AUC_val: ', auc_val)
+                    print(f'mean_in: {in_pred.mean()}, mean_ood: {ood1_pred.mean()}')
+                    logger.add_val(i_iter, {f'validation/auc_': auc_val})
+                    logger.add_val(i_iter, {f'validation/mean_in_': in_pred.mean()})
+                    logger.add_val(i_iter, {f'validation/mean_ood_': ood1_pred.mean()})
+                    logger.add_val(i_iter, {f'validation/mean_var_in_': in_mean_var})
+                    logger.add_val(i_iter, {f'validation/mean_var_out_': out_mean_var})
 
-                    in_pred = self.predict(model, test_loader, self.device)
-                    ood1_pred = self.predict(model, OOD_test_loader, self.device)
-                    for key, val in in_pred.items():
-                        auc_val = roc_btw_arr(ood1_pred[key], val)
-                        print(f'AUC_test({key}): ', auc_val)
-                        print(f'mean_in: {val.mean()}, mean_ood: {ood1_pred[key].mean()}')
-                        logger.add_val(i_iter, {f'test/auc/{key}_': auc_val})
-                        logger.add_val(i_iter, {f'test/mean_in/{key}_': val.mean()})
-                        logger.add_val(i_iter, {f'test/mean_ood/{key}_': ood1_pred[key].mean()})
+                    in_pred, in_mean_var = self.predict_new(model, test_loader, self.device)
+                    ood2_pred, out_mean_var = self.predict_new(model, OOD_test_loader, self.device)
+                    auc_val = roc_btw_arr(ood2_pred, in_pred)
+                    print(f'AUC_test: ', auc_val)
+                    print(f'mean_in: {in_pred.mean()}, mean_ood: {ood2_pred.mean()}')
+                    logger.add_val(i_iter, {f'test/auc_': auc_val})
+                    logger.add_val(i_iter, {f'test/mean_in_': in_pred.mean()})
+                    logger.add_val(i_iter, {f'test/mean_ood_': ood2_pred.mean()})
+                    logger.add_val(i_iter, {f'test/mean_var_in_': in_mean_var})
+                    logger.add_val(i_iter, {f'test/mean_var_out_': out_mean_var})
                 
                 if i_iter % cfg.visualize_interval == 0:
                     d_val = model.visualization_step(train_loader, procedure = "train", device=self.device)
@@ -234,3 +237,30 @@ class BaseTrainer:
         for key, val in l_result.items():
             l_result[key] = torch.cat(val)
         return l_result
+
+    def predict_new(self, m, dl, device, flatten=False, pretrain = False):
+        """run prediction for the whole dataset"""
+        l_result = []
+        var = []
+        for x, _ in dl:
+            pred = []
+            for i in range(5):
+                z_given_x = sample_langevin_z_given_x(x.to(device), energy = m.ebm.net, 
+                                                    sigma = m.sigma, decoder = m.decoder, 
+                                                    encoder = m.encoder, stepsize = 3e-8, 
+                                                    n_steps = 20, temperature = 1e-2, spherical=True)
+                with torch.no_grad():
+                    if flatten:
+                        x = x.view(len(x), -1)
+                    pred.append(-torch.log(m.sigma(z_given_x)).detach().cpu()) # (bs, 1)
+                
+            pred = torch.cat(pred, dim = 1)
+            pred_mean = pred.mean(dim = 1)
+            pred_var = pred.var(dim = 1)
+            l_result.append(pred_mean.detach().cpu())
+            var.append(pred_var.detach().cpu())
+        
+        var = torch.cat(var)
+        mean_var = var.mean()
+        l_result = torch.cat(l_result)
+        return l_result, mean_var

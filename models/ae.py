@@ -14,6 +14,7 @@ from geometry import (
     jacobian_of_f,
     relaxed_distortion_measure
 )
+from models.energy_based import sample_langevin_z_given_x
 
 class AE(nn.Module):
     def __init__(self, encoder, decoder):
@@ -100,13 +101,13 @@ class EnergyAE(AE):
         pos_recon = ((recon - x) ** 2).view(len(x), -1).mean(dim=1)
         if not pretrain:
             pos_e = self.ebm(z, False)/self.ebm.temperature
-            pos_log_det_jacobian = get_log_det_jacobian(self.decoder,z, training=False, return_avg=False, create_graph=True)
+            # pos_log_det_jacobian = get_log_det_jacobian(self.decoder,z, training=False, return_avg=False, create_graph=True)
             D = torch.prod(torch.tensor(x.shape[1:]))
             if self.train_sigma:
                 pos_sigma_sq = self.sigma(z, False).view(-1)
             else:
                 pos_sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
-            total_pos_e = ((pos_recon)/(2 * pos_sigma_sq) + torch.log(pos_sigma_sq)/2 + (pos_log_det_jacobian + pos_e)/D)
+            total_pos_e = ((pos_recon)/(2 * pos_sigma_sq) + torch.log(pos_sigma_sq)/2 + (pos_e)/D)
             loss = total_pos_e.mean()
         
         else:
@@ -234,6 +235,30 @@ class EnergyAE(AE):
                 
         }, neg_x.detach().clone()
     
+    def new_train_step(self, x, z, optimizer,**kwargs):
+        optimizer.zero_grad()
+        recon = self.decode(z)
+        sigma_sq = self.sigma(z, False).view(-1)
+        x_neg = (recon + torch.randn_like(recon) * torch.sqrt(sigma_sq).unsqueeze(1).unsqueeze(1).unsqueeze(1)).detach()
+        z_neg = self.ebm.sample(shape=z.shape, sample_step = self.ebm.sample_step, device=z.device, replay=self.ebm.replay)
+        z_neg = z_neg.detach()
+        pos_recon = ((recon - x) ** 2).view(len(x), -1).mean(dim=1)
+        neg_recon = ((x_neg - recon) ** 2).view(len(x), -1).mean(dim=1)
+        pos_e = self.ebm(z, False)/self.ebm.temperature
+        neg_e = self.ebm(z_neg, False)/self.ebm.temperature
+        D = torch.prod(torch.tensor(x.shape[1:]))
+
+        total_pos_e = pos_recon / (2 * sigma_sq) + pos_e/D
+        total_neg_e = neg_recon / (2 * sigma_sq) + neg_e/D
+        reg_loss = (pos_e**2).mean() + (neg_e**2).mean()
+        loss = total_pos_e.mean() - total_neg_e.mean() + self.ebm.gamma * reg_loss/D
+        loss.backward()
+        optimizer.step()
+        return {"loss": loss.item(), "AE/total_pos_e_": total_pos_e.mean().item(), "AE/total_neg_e_": total_neg_e.mean().item(),
+                "AE/pos_recon_": pos_recon.mean().item(), "AE/neg_recon_": neg_recon.mean().item(),
+                "AE/pos_e_": pos_e.mean().item(), "AE/neg_e_": neg_e.mean().item(),
+                "AE/sigma_sq_": sigma_sq.mean().item()}
+    
     def sample(self, shape, sample_step, device, replay=True, apply_noise = True):
         # sample from latent space
         z = self.ebm.sample(shape=shape, sample_step = sample_step, device=device, replay=replay)
@@ -274,6 +299,12 @@ class EnergyAE(AE):
         x = dl.dataset.data[torch.randperm(len(dl.dataset.data))[:num_figures]]
         z = self.encoder(x.to(device))
         recon = self.decode(z)
+        z_given_x = sample_langevin_z_given_x(x.to(device), energy = self.ebm.net, 
+                                                sigma = self.sigma, decoder = self.decoder, 
+                                                encoder = self.encoder, stepsize = 3e-8, 
+                                                n_steps = 20, temperature = 1e-2, spherical=True)
+        x_given_z = self.decode(z_given_x)
+        x_given_z_img = make_grid(x_given_z.detach().cpu(), nrow=num_each_axis, value_range=(0, 1), pad_value=1)
         x_img = make_grid(x.detach().cpu(), nrow=num_each_axis, value_range=(0, 1), pad_value=1)
         recon_img = make_grid(recon.detach().cpu(), nrow=num_each_axis, value_range=(0, 1), pad_value=1)
         if procedure == 'train_energy' or procedure == "train":
@@ -370,6 +401,7 @@ class EnergyAE(AE):
                     'input@': torch.clip(x_img, min=0, max=1),
                     'recon@': torch.clip(recon_img, min=0, max=1),
                     'sampled@': torch.clip(sampled_img, min=0, max=1),
+                    'conditional_recon@': torch.clip(x_given_z_img, min=0, max=1),
                 }
             else:
                 return {

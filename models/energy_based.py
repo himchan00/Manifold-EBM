@@ -337,3 +337,86 @@ def sample_langevin(x, model, stepsize, n_steps, temperature, noise_scale=None, 
         return l_samples, l_dynamics, l_drift, l_diffusion
     else:
         return x.detach()
+
+
+def sample_langevin_z_given_x(x, energy, sigma, decoder, encoder, stepsize, n_steps, temperature, noise_scale=None, intermediate_samples=False,
+                    clip_x=None, clip_grad=None, reject_boundary=False, noise_anneal=None,
+                    spherical=False):
+    """Draw samples using Langevin dynamics
+    x: torch.Tensor, initial points
+    model: An energy-based model. returns energy
+    stepsize: float
+    n_steps: integer
+    noise_scale: Optional. float. If None, set to np.sqrt(stepsize * 2)
+    clip_x : tuple (start, end) or None boundary of square domain
+    reject_boundary: Reject out-of-domain samples if True. otherwise clip.
+    """
+    assert not ((stepsize is None) and (noise_scale is None)), 'stepsize and noise_scale cannot be None at the same time'
+    if noise_scale is None:
+        noise_scale = np.sqrt(stepsize * 2)
+    if stepsize is None:
+        stepsize = (noise_scale ** 2) / 2
+    noise_scale_ = noise_scale
+
+    l_samples = []
+    l_dynamics = []; l_drift = []; l_diffusion = []
+    z = encoder(x).detach()
+    z.requires_grad = True
+    bs, n = z.shape[0], z.shape[1]
+    D = torch.prod(torch.tensor(x.shape[1:]))
+
+    def model(z):
+        x_bar = decoder(z)
+        recon_err = ((x_bar - x) ** 2).view(len(x), -1).sum(dim=1)
+        e = energy.forward_for_energy(z)/temperature
+        sigma_sq = sigma.forward_for_energy(z)
+        return e + (recon_err)/(2 * sigma_sq) + D*torch.log(sigma_sq)/2
+
+    for i_step in range(n_steps):
+        l_samples.append(z.detach().to('cpu'))
+        noise = torch.randn_like(z) * noise_scale_
+        out = model(z)
+        grad = autograd.grad(out.sum(), z, only_inputs=True)[0]
+        if clip_grad is not None:
+            grad = clip_vector_norm(grad, max_norm=clip_grad)
+        if spherical:
+            z_ = z.detach()
+            Z = z_.unsqueeze(2).to(z)
+            Z_t = Z.permute(0, 2, 1).to(z)
+            P = torch.eye(n).repeat(bs, 1, 1).to(z) - torch.bmm(Z, Z_t).to(z)
+            dynamics = - stepsize * grad + noise # negative!
+            v = torch.bmm(P, dynamics.unsqueeze(2)).squeeze(2)
+            v_norm = v.norm(dim=1, keepdim=True)
+            znew = z * torch.cos(v_norm) + v/v_norm * torch.sin(v_norm)
+        else:
+            dynamics = - stepsize * grad + noise # negative!
+            xnew = x + dynamics
+        if clip_x is not None:
+            if reject_boundary:
+                accept = ((xnew >= clip_x[0]) & (xnew <= clip_x[1])).view(len(x), -1).all(dim=1)
+                reject = ~ accept
+                xnew[reject] = x[reject]
+                x = xnew
+            else:
+                x = torch.clamp(xnew, clip_x[0], clip_x[1])
+        else:
+            z = znew
+
+        # if spherical:
+        #     if len(x.shape) == 4:
+        #         x = x / x.view(len(x), -1).norm(dim=1)[:, None, None ,None]
+        #     else:
+        #         x = x / x.norm(dim=1, keepdim=True)
+
+        if noise_anneal is not None:
+            noise_scale_ = noise_scale / (1 + i_step)
+
+        l_dynamics.append(dynamics.detach().to('cpu'))
+        l_drift.append((- stepsize * grad).detach().cpu())
+        l_diffusion.append(noise.detach().cpu())
+    l_samples.append(z.detach().to('cpu'))
+
+    if intermediate_samples:
+        return l_samples, l_dynamics, l_drift, l_diffusion
+    else:
+        return z.detach()

@@ -55,7 +55,7 @@ model:
     conformal_detach: false
     train_sigma: True
   ebm:
-    gamma: 0.0
+    gamma: 0.001
     temperature: 0.01
     step_size: 0.001
     noise_scale: null
@@ -107,19 +107,19 @@ data:
   
 trainer: base
 training:
-  n_epoch: 150
-  n_epoch_pre: 100
-  n_epoch_ebm: 30
-  fix_decoder: false
+  n_epoch: 200
+  n_epoch_pre: 30
+  n_epoch_ebm: 10
+  fix_decoder: False
   optimizer_pre:
     name: 'adam'
     lr: 1e-4
   optimizer:
     lr_encoder: 1e-4
     lr_encoder_pre: 1e-4
-    lr_decoder: 3e-5
-    lr_energy: 3e-5
-    lr_sigma: 3e-5
+    lr_decoder: 1e-5
+    lr_energy: 1e-5
+    lr_sigma: 1e-5
   print_interval: 200
   val_interval: 200
   visualize_interval: 200
