@@ -57,7 +57,7 @@ model:
   ebm:
     gamma: 0.001
     temperature: 0.01
-    step_size: 1e-8
+    step_size: 3e-8
     noise_scale: null
     sample_step: 30
     buffer_size: 10000

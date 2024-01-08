@@ -240,27 +240,14 @@ class EnergyAE(AE):
         optimizer.zero_grad()
         recon = self.decode(z)
         sigma_sq = self.sigma(z, False).view(-1)
-        x_neg = (recon + torch.randn_like(recon) * torch.sqrt(sigma_sq).unsqueeze(1).unsqueeze(1).unsqueeze(1)).detach()
-        # z_neg = self.ebm.sample(shape=z.shape, sample_step = self.ebm.sample_step, device=z.device, replay=self.ebm.replay)
-        z_neg = torch.randn_like(z)
-        z_neg = z_neg.detach()
         pos_recon = ((recon - x) ** 2).view(len(x), -1).mean(dim=1)
-        neg_recon = ((x_neg - recon) ** 2).view(len(x), -1).mean(dim=1)
-        # pos_e = self.ebm(z, False)/self.ebm.temperature
-        # neg_e = self.ebm(z_neg, False)/self.ebm.temperature
-        pos_e = (z ** 2 / 2).sum(dim = 1)
-        neg_e = (z_neg ** 2 / 2).sum(dim = 1)
-        #D = torch.prod(torch.tensor(x.shape[1:]))
-
-        total_pos_e = pos_recon / (2 * sigma_sq) # + pos_e/D
-        total_neg_e = neg_recon / (2 * sigma_sq) # + neg_e/D
-        # reg_loss = (pos_e**2).mean() + (neg_e**2).mean()
-        loss = total_pos_e.mean() - total_neg_e.mean()#  + self.ebm.gamma * reg_loss/D
+        loss = (pos_recon / (2 * sigma_sq) + torch.log(sigma_sq)/2).mean()
+        e = (z**2).sum(dim = 1) / 2
         loss.backward()
         optimizer.step()
-        return {"loss": loss.item(), "AE/total_pos_e_": total_pos_e.mean().item(), "AE/total_neg_e_": total_neg_e.mean().item(),
-                "AE/pos_recon_": pos_recon.mean().item(), "AE/neg_recon_": neg_recon.mean().item(),
-                "AE/pos_e_": pos_e.mean().item(), "AE/neg_e_": neg_e.mean().item(),
+        return {"loss": loss.item(), 
+                "AE/pos_recon_": pos_recon.mean().item(), 
+                "AE/energy_": e.mean().item(),
                 "AE/sigma_sq_": sigma_sq.mean().item()}
     
     def sample(self, shape, sample_step, device, replay=True, apply_noise = True):
