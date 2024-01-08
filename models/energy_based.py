@@ -368,7 +368,10 @@ def sample_langevin_z_given_x(x, energy, sigma, decoder, encoder, stepsize, n_st
     def model(z):
         x_bar = decoder(z)
         recon_err = ((x_bar - x) ** 2).view(len(x), -1).sum(dim=1)
-        e = energy.forward_for_energy(z)/temperature
+        if energy == None:
+            e = (z ** 2 / 2).sum(dim=1)
+        else:
+            e = energy.forward_for_energy(z)/temperature
         sigma_sq = sigma.forward_for_energy(z)
         return e + (recon_err)/(2 * sigma_sq) + D*torch.log(sigma_sq)/2
 
@@ -390,7 +393,7 @@ def sample_langevin_z_given_x(x, energy, sigma, decoder, encoder, stepsize, n_st
             znew = z * torch.cos(v_norm) + v/v_norm * torch.sin(v_norm)
         else:
             dynamics = - stepsize * grad + noise # negative!
-            xnew = x + dynamics
+            znew = z + dynamics
         if clip_x is not None:
             if reject_boundary:
                 accept = ((xnew >= clip_x[0]) & (xnew <= clip_x[1])).view(len(x), -1).all(dim=1)
@@ -400,7 +403,8 @@ def sample_langevin_z_given_x(x, energy, sigma, decoder, encoder, stepsize, n_st
             else:
                 x = torch.clamp(xnew, clip_x[0], clip_x[1])
         else:
-            z = znew
+            z = znew.detach().clone()
+            z.requires_grad = True
 
         # if spherical:
         #     if len(x.shape) == 4:

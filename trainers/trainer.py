@@ -30,10 +30,10 @@ class BaseTrainer:
         i_iter = 0
         best_val_loss = np.inf
         bs = train_loader.batch_size
-        z_dim = model.encoder.z_dim
+        z_dim = model.encoder.out_chan
         z_shape = (bs, z_dim)
-        model.encoder.load_state_dict(torch.load("pretrained/encoder_ho_9_z_dim_15.pth"))
-        model.decoder.load_state_dict(torch.load("pretrained/decoder_ho_9_z_dim_15.pth"))
+        # model.encoder.load_state_dict(torch.load("pretrained/encoder_ho_3_z_dim_15.pth"))
+        # model.decoder.load_state_dict(torch.load("pretrained/decoder_ho_3_z_dim_15.pth"))
         # for i_epoch in range(1, cfg['n_epoch_pre'] + 1):
         #     for x, _ in train_loader:
         #         model.train()
@@ -84,7 +84,7 @@ class BaseTrainer:
         #             logger.add_val(i_iter, d_val)
         #         i_iter += 1
         # torch.save(model.ebm.net.fc_nets.state_dict(), "pretrained/ebm_ho_9_z_dim_15_epoch_10.pth")
-        model.ebm.net.fc_nets.load_state_dict(torch.load("pretrained/ebm_ho_9_z_dim_15.pth"))
+        # model.ebm.net.fc_nets.load_state_dict(torch.load("pretrained/ebm_ho_3_z_dim_15.pth"))
         if not cfg['fix_decoder']:
             self.optimizer_pre = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
                                            # {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']}
@@ -94,7 +94,7 @@ class BaseTrainer:
                 optimizer = optim.Adam([#{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_energy']},
                                         {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
                                         {'params': model.sigma.fc_nets.parameters(), 'lr': cfg.optimizer['lr_sigma']},
-                                        {'params': model.ebm.net.fc_nets.parameters(), 'lr': cfg.optimizer['lr_energy']}
+                                        # {'params': model.ebm.net.fc_nets.parameters(), 'lr': cfg.optimizer['lr_energy']}
                                         ])
             else:
                 optimizer = optim.Adam([#{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
@@ -118,9 +118,9 @@ class BaseTrainer:
                 #                         ])
                 optimizer = None
 
-        model.ebm.net.encoder = copy.deepcopy(model.encoder.net)
-        model.ebm.net.decoder = copy.deepcopy(model.decoder)
-        model.sigma.encoder = copy.deepcopy(model.encoder.net)
+        # model.ebm.net.encoder = copy.deepcopy(model.encoder.net)
+        # model.ebm.net.decoder = copy.deepcopy(model.decoder)
+        model.sigma.encoder = copy.deepcopy(model.encoder)
         model.sigma.decoder = copy.deepcopy(model.decoder)
 
         self.optimizer = optimizer
@@ -130,10 +130,10 @@ class BaseTrainer:
                 start_ts = time.time()
 
                 d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
-                z_given_x = sample_langevin_z_given_x(x.to(self.device), energy = model.ebm.net, 
+                z_given_x = sample_langevin_z_given_x(x.to(self.device), energy = None, 
                                                                 sigma = model.sigma, decoder = model.decoder, 
                                                                 encoder = model.encoder, stepsize = 3e-8, 
-                                                                n_steps = 20, temperature = 1e-2, spherical=True)
+                                                                n_steps = 30, temperature = 1e-2, spherical=False)
                 
                 # neg_x = model.sample(shape = z_shape, sample_step = model.ebm.sample_step,
                 #                                 device = self.device, replay = model.ebm.replay)
@@ -149,11 +149,9 @@ class BaseTrainer:
                 # d_train_e = model.train_energy_step(x.to(self.device), optimizer_e=self.optimizer_e, pretrain = False, **kwargs)    
                 # update target network
                 tau = 0.005
-                for param, target_param_e, target_param_s in zip(model.encoder.net.parameters(), model.ebm.net.encoder.parameters(), model.sigma.encoder.parameters()):
-                    target_param_e.data.copy_(tau * param.data + (1 - tau) * target_param_e.data)
+                for param, target_param_s in zip(model.encoder.parameters(), model.sigma.encoder.parameters()):
                     target_param_s.data.copy_(tau * param.data + (1 - tau) * target_param_s.data)
-                for param, target_param_e, target_param_s in zip(model.decoder.parameters(), model.ebm.net.decoder.parameters(), model.sigma.decoder.parameters()):
-                    target_param_e.data.copy_(tau * param.data + (1 - tau) * target_param_e.data)
+                for param, target_param_s in zip(model.decoder.parameters(), model.sigma.decoder.parameters()):
                     target_param_s.data.copy_(tau * param.data + (1 - tau) * target_param_s.data)
 
                 time_meter.update(time.time() - start_ts)
@@ -244,11 +242,11 @@ class BaseTrainer:
         var = []
         for x, _ in dl:
             pred = []
-            for i in range(5):
-                z_given_x = sample_langevin_z_given_x(x.to(device), energy = m.ebm.net, 
+            for i in range(1):
+                z_given_x = sample_langevin_z_given_x(x.to(device), energy = None, 
                                                     sigma = m.sigma, decoder = m.decoder, 
                                                     encoder = m.encoder, stepsize = 3e-8, 
-                                                    n_steps = 20, temperature = 1e-2, spherical=True)
+                                                    n_steps = 30, temperature = 1e-2, spherical=False)
                 with torch.no_grad():
                     if flatten:
                         x = x.view(len(x), -1)
