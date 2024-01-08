@@ -105,7 +105,7 @@ class EnergyAE(AE):
             # pos_log_det_jacobian = get_log_det_jacobian(self.decoder,z, training=False, return_avg=False, create_graph=True)
             D = torch.prod(torch.tensor(x.shape[1:]))
             if self.train_sigma:
-                pos_sigma_sq = self.sigma(z, False).view(-1)
+                pos_sigma_sq = self.sigma.forward_for_energy(z).view(-1)
             else:
                 pos_sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
             total_pos_e = ((pos_recon)/(2 * pos_sigma_sq) + torch.log(pos_sigma_sq)/2 + (pos_e)/D)
@@ -235,11 +235,28 @@ class EnergyAE(AE):
                 # "AE/iso_loss_": iso_loss.item()
                 
         }, neg_x.detach().clone()
+
+    def joint_train_step(self, x, optimizer, **kwargs):
+        optimizer.zero_grad()
+        z = self.encode(x)
+        recon = self.decode(z)
+        pos_recon = ((recon - x) ** 2).view(len(x), -1).mean(dim=1)
+        e = (z**2).sum(dim = 1) / 2
+        D = torch.prod(torch.tensor(x.shape[1:]))
+        sigma_sq = self.sigma.forward_for_energy(z).view(-1)
+        loss = (pos_recon / (2 * sigma_sq) + torch.log(sigma_sq)/2 + (e)/D).mean()
+        loss.backward()
+        optimizer.step()
+
+        return {"loss": loss.item(),
+                "AE/pos_recon_": pos_recon.mean().item(), 
+                "AE/energy_": e.mean().item(),
+                "AE/sigma_sq_": sigma_sq.mean().item()}
     
     def new_train_step(self, x, z, optimizer,**kwargs):
         optimizer.zero_grad()
         recon = self.decode(z)
-        sigma_sq = self.sigma(z, False).view(-1)
+        sigma_sq = self.sigma.forward_for_energy(z).view(-1)
         pos_recon = ((recon - x) ** 2).view(len(x), -1).mean(dim=1)
         loss = (pos_recon / (2 * sigma_sq) + torch.log(sigma_sq)/2).mean()
         e = (z**2).sum(dim = 1) / 2
