@@ -251,25 +251,30 @@ class EnergyAE(AE):
                 "AE/pos_recon_": pos_recon.mean().item(), 
                 "AE/energy_": e.mean().item(),
                 "AE/sigma_sq_": sigma_sq.mean().item()}
-    
-    def new_train_step(self, x, z, optimizer,**kwargs):
-        optimizer.zero_grad()
+
+    def new_train_step(self, x, optimizer, **kwargs):
+        z = self.encode(x).detach().clone()
         recon = self.decode(z)
         sigma_sq = self.sigma.forward(z, False).view(-1)
         pos_recon = ((recon - x) ** 2).view(len(x), -1).mean(dim=1)
         neg_z = self.ebm.sample(shape=z.shape, sample_step = self.ebm.sample_step, device=z.device, replay=self.ebm.replay)
         pos_e = self.ebm.forward(z, False)/self.ebm.temperature
         neg_e = self.ebm.forward(neg_z, False)/self.ebm.temperature
+        pos_log_det_jacobian = get_log_det_jacobian(self.decoder,z, training=False, return_avg=False, create_graph=True)
+        neg_log_det_jacobian = get_log_det_jacobian(self.decoder, neg_z, training=False, return_avg=False, create_graph=True)
         reg_loss = (pos_e**2).mean() + (neg_e**2).mean()
         D = torch.prod(torch.tensor(x.shape[1:]))
-        loss = (pos_recon / (2 * sigma_sq) + torch.log(sigma_sq)/2 + (pos_e - neg_e)/D).mean()
+        loss = (pos_recon / (2 * sigma_sq) + torch.log(sigma_sq)/2 + (pos_e + pos_log_det_jacobian - neg_e - neg_log_det_jacobian)/D).mean()
         loss += self.ebm.gamma * reg_loss/D
+        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        return {"loss": loss.item(), 
+        return {"loss": loss.item(),
                 "AE/pos_recon_": pos_recon.mean().item(), 
                 "AE/pos_e_": pos_e.mean().item(),
                 "AE/neg_e_": neg_e.mean().item(),
+                "AE/pos_log_det_jacobian_": pos_log_det_jacobian.mean().item(),
+                "AE/neg_log_det_jacobian_": neg_log_det_jacobian.mean().item(),
                 "AE/sigma_sq_": sigma_sq.mean().item()}
     
     def sample(self, shape, sample_step, device, replay=True, apply_noise = True):
@@ -289,9 +294,9 @@ class EnergyAE(AE):
         with torch.no_grad():
             z = self.encode(x)
             recon = self.decode(z)
-            energy = self.ebm.forward_with_x(recon)/self.ebm.temperature
+            energy = self.ebm(z, False)/self.ebm.temperature
             if self.train_sigma:
-                sigma_sq = self.sigma.forward_with_x(recon).view(-1)
+                sigma_sq = self.sigma(z, False).view(-1)
             else:
                 sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
             # energy = (z**2).sum(dim = 1) / 2
@@ -312,12 +317,12 @@ class EnergyAE(AE):
         x = dl.dataset.data[torch.randperm(len(dl.dataset.data))[:num_figures]]
         z = self.encoder(x.to(device))
         recon = self.decode(z)
-        z_given_x = sample_langevin_z_given_x(x.to(device), energy = self.ebm, 
-                                                sigma = self.sigma, decoder = self.decoder, 
-                                                encoder = self.encoder, stepsize = self.ebm.conditional_step_size, 
-                                                n_steps = self.ebm.conditional_sample_step, temperature = self.ebm.temperature, spherical=True)
-        x_given_z = self.decode(z_given_x)
-        x_given_z_img = make_grid(x_given_z.detach().cpu(), nrow=num_each_axis, value_range=(0, 1), pad_value=1)
+        # z_given_x = sample_langevin_z_given_x(x.to(device), energy = self.ebm, 
+        #                                         sigma = self.sigma, decoder = self.decoder, 
+        #                                         encoder = self.encoder, stepsize = self.ebm.conditional_step_size, 
+        #                                         n_steps = self.ebm.conditional_sample_step, temperature = self.ebm.temperature, spherical=True)
+        # x_given_z = self.decode(z_given_x)
+        # x_given_z_img = make_grid(x_given_z.detach().cpu(), nrow=num_each_axis, value_range=(0, 1), pad_value=1)
         x_img = make_grid(x.detach().cpu(), nrow=num_each_axis, value_range=(0, 1), pad_value=1)
         recon_img = make_grid(recon.detach().cpu(), nrow=num_each_axis, value_range=(0, 1), pad_value=1)
         if procedure == 'train_energy' or procedure == "train":
@@ -414,7 +419,7 @@ class EnergyAE(AE):
                     'input@': torch.clip(x_img, min=0, max=1),
                     'recon@': torch.clip(recon_img, min=0, max=1),
                     'sampled@': torch.clip(sampled_img, min=0, max=1),
-                    'conditional_recon@': torch.clip(x_given_z_img, min=0, max=1),
+                    #'conditional_recon@': torch.clip(x_given_z_img, min=0, max=1),
                 }
             else:
                 return {

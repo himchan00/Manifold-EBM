@@ -300,6 +300,8 @@ class sigma_net(nn.Module):
         x_bar = self.decoder(z)
         x = self.encoder.get_feature(x_bar, grad=True).squeeze(2).squeeze(2)
         x = self.fc_nets(x)
+        x = torch.sigmoid(x)
+        x = torch.exp(self.min + (self.max - self.min) * x)
         return x
     
     def forward(self, z, grad = True):

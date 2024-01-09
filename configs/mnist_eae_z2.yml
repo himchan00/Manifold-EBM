@@ -62,8 +62,8 @@ model:
     sample_step: 100
     buffer_size: 10000
     replay_ratio: 0.95
-    conditional_step_size: 3e-8
-    conditional_sample_step: 10
+    conditional_step_size: null
+    conditional_sample_step: null
     langevin_clip_grad: Null
 data:
   training:
@@ -73,7 +73,7 @@ data:
     n_workers: 4
     split: training
     shuffle: True
-    digits: [0, 1, 2, 3, 4, 5, 6, 8, 9]
+    digits: [0, 1, 2, 3, 4, 5, 6, 7, 8]
   validation:
     dataset: MNIST
     root: dataset
@@ -81,7 +81,7 @@ data:
     n_workers: 4
     split: validation
     shuffle: False
-    digits: [0, 2, 3, 4, 5, 6, 7, 8, 9]
+    digits: [0, 1, 2, 3, 4, 5, 6, 7, 8]
   test:
     dataset: MNIST
     root: dataset
@@ -89,7 +89,7 @@ data:
     n_workers: 4
     split: test
     shuffle: False
-    digits: [0, 2, 3, 4, 5, 6, 7, 8, 9]
+    digits: [0, 1, 2, 3, 4, 5, 6, 7, 8]
   OOD_validation:
     dataset: MNIST
     root: dataset
@@ -97,7 +97,7 @@ data:
     n_workers: 4
     split: validation
     shuffle: False
-    digits: [1]
+    digits: [9]
   OOD_test:
     dataset: MNIST
     root: dataset
@@ -105,7 +105,7 @@ data:
     n_workers: 4
     split: test
     shuffle: False
-    digits: [1]
+    digits: [9]
   
 trainer: base
 training:
