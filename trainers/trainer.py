@@ -91,7 +91,7 @@ class BaseTrainer:
                             ])
             
             if model.train_sigma:
-                optimizer = optim.Adam([#{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_energy']},
+                optimizer = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
                                         {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
                                         {'params': model.sigma.fc_nets.parameters(), 'lr': cfg.optimizer['lr_sigma']},
                                          {'params': model.ebm.net.fc_nets.parameters(), 'lr': cfg.optimizer['lr_energy']}
@@ -131,10 +131,11 @@ class BaseTrainer:
                 
                 # neg_x = model.sample(shape = z_shape, sample_step = model.ebm.sample_step,
                 #                                device = self.device, replay = model.ebm.replay)
-                d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =True, **kwargs)
+                #d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =True, **kwargs)
                 #d_train_p_neg = model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, neg_sample = True, **kwargs)
                 #d_train_t, _ = model.train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
-                d_train_t = model.new_train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
+                # d_train_t = model.new_train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
+                d_train_t = model.joint_train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
                 # d_train_reg_neg = model.regularization_step(neg_x.to(self.device), optimizer_reg=optimizer_reg, neg_sample = True, **kwargs)
                 # neg_x = model.sample(shape = z_shape, sample_step = model.ebm.sample_step,
                 #                                 device = self.device, replay = model.ebm.replay, apply_noise = True)
@@ -145,13 +146,14 @@ class BaseTrainer:
                 #     d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
                 # d_train_e = model.train_energy_step(x.to(self.device), optimizer_e=self.optimizer_e, pretrain = False, **kwargs)    
                 # update target network
-                tau = 0.005
+                tau_e = 0.005
                 for param, target_param_s, target_param_e in zip(model.encoder.parameters(), model.sigma.encoder.parameters(), model.ebm.net.encoder.parameters()):
-                    target_param_s.data.copy_(tau * param.data + (1 - tau) * target_param_s.data)
-                    target_param_e.data.copy_(tau * param.data + (1 - tau) * target_param_e.data)
+                    target_param_s.data.copy_(tau_e * param.data + (1 - tau_e) * target_param_s.data)
+                    target_param_e.data.copy_(tau_e * param.data + (1 - tau_e) * target_param_e.data)
+                tau_d = 1.0
                 for param, target_param_s, target_param_e in zip(model.decoder.parameters(), model.sigma.decoder.parameters(), model.ebm.net.decoder.parameters()):
-                    target_param_s.data.copy_(tau * param.data + (1 - tau) * target_param_s.data)
-                    target_param_e.data.copy_(tau * param.data + (1 - tau) * target_param_e.data)
+                    target_param_s.data.copy_(tau_d * param.data + (1 - tau_d) * target_param_s.data)
+                    target_param_e.data.copy_(tau_d * param.data + (1 - tau_d) * target_param_e.data)
 
                 time_meter.update(time.time() - start_ts)
                 if model.train_sigma:
@@ -165,7 +167,7 @@ class BaseTrainer:
                     logger.add_val(i_iter, d_train)
                     if model.train_sigma:
                         logger.add_val(i_iter, d_train_t)
-                        logger.add_val(i_iter, d_train_p)
+                        # logger.add_val(i_iter, d_train_p)
                         # logger.add_val(i_iter, d_train_p_neg)
                         #logger.add_val(i_iter, d_train_reg)
                         #logger.add_val(i_iter, d_train_reg_neg)

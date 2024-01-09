@@ -236,20 +236,30 @@ class EnergyAE(AE):
         }, neg_x.detach().clone()
 
     def joint_train_step(self, x, optimizer, **kwargs):
-        optimizer.zero_grad()
         z = self.encode(x)
+        z_ = z.detach().clone()
         recon = self.decode(z)
+        sigma_sq = self.sigma.forward(z_, False).view(-1)
         pos_recon = ((recon - x) ** 2).view(len(x), -1).mean(dim=1)
-        e = (z**2).sum(dim = 1) / 2
+        neg_z = self.ebm.sample(shape=z.shape, sample_step = self.ebm.sample_step, device=z.device, replay=self.ebm.replay)
+        pos_e = self.ebm.forward(z_, False)/self.ebm.temperature
+        neg_e = self.ebm.forward(neg_z, False)/self.ebm.temperature
+        pos_log_det_jacobian = get_log_det_jacobian(self.decoder,z_, training=False, return_avg=False, create_graph=True)
+        neg_log_det_jacobian = get_log_det_jacobian(self.decoder, neg_z, training=False, return_avg=False, create_graph=True)
+        reg_loss = (pos_e**2).mean() + (neg_e**2).mean()
         D = torch.prod(torch.tensor(x.shape[1:]))
-        sigma_sq = self.sigma.forward_for_energy(z).view(-1)
-        loss = (pos_recon / (2 * sigma_sq) + torch.log(sigma_sq)/2 + (e)/D).mean()
+        D_eff = D - self.encoder.z_dim + 1
+        loss = (pos_recon / (2 * sigma_sq) + D_eff/D * torch.log(sigma_sq)/2 + (pos_e + pos_log_det_jacobian - neg_e - neg_log_det_jacobian)/D).mean()
+        loss += self.ebm.gamma * reg_loss/D
+        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-
         return {"loss": loss.item(),
                 "AE/pos_recon_": pos_recon.mean().item(), 
-                "AE/energy_": e.mean().item(),
+                "AE/pos_e_": pos_e.mean().item(),
+                "AE/neg_e_": neg_e.mean().item(),
+                "AE/pos_log_det_jacobian_": pos_log_det_jacobian.mean().item(),
+                "AE/neg_log_det_jacobian_": neg_log_det_jacobian.mean().item(),
                 "AE/sigma_sq_": sigma_sq.mean().item()}
 
     def new_train_step(self, x, optimizer, **kwargs):
@@ -264,7 +274,8 @@ class EnergyAE(AE):
         neg_log_det_jacobian = get_log_det_jacobian(self.decoder, neg_z, training=False, return_avg=False, create_graph=True)
         reg_loss = (pos_e**2).mean() + (neg_e**2).mean()
         D = torch.prod(torch.tensor(x.shape[1:]))
-        loss = (pos_recon / (2 * sigma_sq) + torch.log(sigma_sq)/2 + (pos_e + pos_log_det_jacobian - neg_e - neg_log_det_jacobian)/D).mean()
+        D_eff = D - self.encoder.z_dim + 1
+        loss = (pos_recon / (2 * sigma_sq) + D_eff / D *torch.log(sigma_sq)/2 + (pos_e + pos_log_det_jacobian - neg_e - neg_log_det_jacobian)/D).mean()
         loss += self.ebm.gamma * reg_loss/D
         optimizer.zero_grad()
         loss.backward()
@@ -291,6 +302,7 @@ class EnergyAE(AE):
     
     def neg_log_prob(self, x, pretrain = False):
         D = torch.prod(torch.tensor(x.shape[1:]))
+        D_eff = D - self.encoder.z_dim + 1
         with torch.no_grad():
             z = self.encode(x)
             recon = self.decode(z)
@@ -303,7 +315,7 @@ class EnergyAE(AE):
             
         log_det_jacobian = get_log_det_jacobian(self.decoder, z.detach(), return_avg= False, training=False, create_graph=False)
         recon_error = ((recon - x) ** 2).view(len(x), -1).mean(dim=1)
-        neg_log_prob = recon_error/(2 * (sigma_sq)) + torch.log(sigma_sq)/2 + (energy + log_det_jacobian)/D 
+        neg_log_prob = recon_error/(2 * (sigma_sq)) + D_eff / D * torch.log(sigma_sq)/2 + (energy + log_det_jacobian)/D 
         return {"neg_log_prob": neg_log_prob, "recon_error": recon_error,
                 "energy": energy, "log_det_jacobian": log_det_jacobian
                }
