@@ -7,7 +7,8 @@ import torch.nn.functional as F
 
 class EnergyBasedModel(nn.Module):
     def __init__(self, net, bound = 'spherical', gamma=1.0,  temperature = 1.0, step_size=0.1, sample_step=50,
-                 langevin_clip_grad=None, noise_scale = None, buffer_size=10000, replay_ratio=0.95):
+                 langevin_clip_grad=None, noise_scale = None, buffer_size=10000, replay_ratio=0.95,
+                 conditional_sample_step = 10, conditional_step_size = 3e-8):
         super().__init__()
         self.net = net
         self.bound = bound
@@ -29,6 +30,8 @@ class EnergyBasedModel(nn.Module):
         # self.buffer = SampleBuffer_HMC(replay_ratio= replay_ratio, bound=bound)
         self.replay_ratio = replay_ratio
         self.replay = True if self.replay_ratio > 0 else False
+        self.conditional_sample_step = conditional_sample_step
+        self.conditional_step_size = conditional_step_size
 
     def forward(self, x, grad = True):
         return self.net(x, grad).view(-1)

@@ -104,7 +104,7 @@ def get_ae(**model_cfg):
         energy = energy_net(encoder, decoder, model_cfg["encoder"]["nh_mlp"], model_cfg["energy"]["n_layers"])
         from models.energy_based import EnergyBasedModel
         ebm = EnergyBasedModel(energy, **model_cfg["ebm"])
-        model = EnergyAE(encoder, decoder, ebm, sigma, **model_cfg["energy_ae"])
+        model = EnergyAE(normalized_net(encoder), decoder, ebm, sigma, **model_cfg["energy_ae"])
     return model
 
 def get_model(cfg, *args, version=None, **kwargs):
