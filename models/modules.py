@@ -154,7 +154,7 @@ ConvNet for (1, 28, 28) image, following architecture in (Ghosh et al., 2019)
 
 class ConvNet28(nn.Module):
     def __init__(
-        self, in_chan=1, out_chan=64, nh=32, out_activation="linear", activation="relu"
+        self, in_chan=1, out_chan=64, nh=8, out_activation="linear", activation="relu"
     ):
         """nh: determines the numbers of conv filters"""
         super(ConvNet28, self).__init__()
@@ -202,7 +202,7 @@ class DeConvNet28(nn.Module):
         self,
         in_chan=1,
         out_chan=1,
-        nh=32,
+        nh=8,
         out_activation="sigmoid",
         activation="relu",
     ):
@@ -281,7 +281,7 @@ class energy_net(nn.Module):
         return x
 
 class sigma_net(nn.Module):
-    def __init__(self, encoder, decoder, nh_mlp = 512, n_layers = 3, min_sigma_sq = 1e-4, max_sigma_sq = 1e-2):
+    def __init__(self, encoder, decoder, nh_mlp = 256, n_layers = 3, min_sigma_sq = 1e-4, max_sigma_sq = 1e-2):
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
@@ -314,7 +314,8 @@ class sigma_net(nn.Module):
         return x
 
     def forward_with_x(self, x, grad = True):
-        x = self.encoder.get_feature(x, grad=grad).squeeze(2).squeeze(2)
+        # x = self.encoder.get_feature(x, grad=grad).squeeze(2).squeeze(2)
+        x = self.encoder(x)
         x = self.fc_nets(x)
         x = torch.sigmoid(x)
         x = torch.exp(self.min + (self.max - self.min) * x)

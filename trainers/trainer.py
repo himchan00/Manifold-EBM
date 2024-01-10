@@ -30,10 +30,10 @@ class BaseTrainer:
         i_iter = 0
         best_val_loss = np.inf
         bs = train_loader.batch_size
-        z_dim = model.encoder.z_dim
+        z_dim = model.encoder.out_chan
         z_shape = (bs, z_dim)
-        model.encoder.load_state_dict(torch.load("pretrained/encoder_ho_9_z_dim_15.pth"))
-        model.decoder.load_state_dict(torch.load("pretrained/decoder_ho_9_z_dim_15.pth"))
+        # model.encoder.load_state_dict(torch.load("pretrained/encoder_ho_9_z_dim_15.pth"))
+        # model.decoder.load_state_dict(torch.load("pretrained/decoder_ho_9_z_dim_15.pth"))
         # for i_epoch in range(1, cfg['n_epoch_pre'] + 1):
         #     for x, _ in train_loader:
         #         model.train()
@@ -84,7 +84,10 @@ class BaseTrainer:
         #             logger.add_val(i_iter, d_val)
         #         i_iter += 1
         # torch.save(model.ebm.net.fc_nets.state_dict(), "pretrained/ebm_ho_9_z_dim_15_epoch_10.pth")
-        model.ebm.net.fc_nets.load_state_dict(torch.load("pretrained/ebm_ho_9_z_dim_15.pth"))
+        # model.ebm.net.fc_nets.load_state_dict(torch.load("pretrained/ebm_ho_9_z_dim_15.pth"))
+        # model.sigma.encoder = copy.deepcopy(model.encoder)
+        # model.sigma.decoder = copy.deepcopy(model.decoder)
+
         if not cfg['fix_decoder']:
             self.optimizer_pre = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
                                            # {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']}
@@ -93,8 +96,10 @@ class BaseTrainer:
             if model.train_sigma:
                 optimizer = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
                                         {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
-                                        {'params': model.sigma.fc_nets.parameters(), 'lr': cfg.optimizer['lr_sigma']},
-                                         {'params': model.ebm.net.fc_nets.parameters(), 'lr': cfg.optimizer['lr_energy']}
+                                        # {'params': model.sigma.fc_nets.parameters(), 'lr': cfg.optimizer['lr_sigma']},
+                                        # {'params': model.sigma.encoder.parameters(), 'lr': cfg.optimizer['lr_sigma']},
+                                        {'params': model.sigma.parameters(), 'lr': cfg.optimizer['lr_sigma']},
+                                         #{'params': model.ebm.net.fc_nets.parameters(), 'lr': cfg.optimizer['lr_energy']}
                                         ])
             else:
                 optimizer = optim.Adam([#{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
@@ -118,10 +123,8 @@ class BaseTrainer:
                 #                         ])
                 optimizer = None
 
-        model.ebm.net.encoder = copy.deepcopy(model.encoder.net)
-        model.ebm.net.decoder = copy.deepcopy(model.decoder)
-        model.sigma.encoder = copy.deepcopy(model.encoder.net)
-        model.sigma.decoder = copy.deepcopy(model.decoder)
+        # model.ebm.net.encoder = copy.deepcopy(model.encoder.net)
+        # model.ebm.net.decoder = copy.deepcopy(model.decoder)
 
         self.optimizer = optimizer
         for i_epoch in range(1, cfg['n_epoch'] + 1):
@@ -135,7 +138,7 @@ class BaseTrainer:
                 #d_train_p_neg = model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, neg_sample = True, **kwargs)
                 #d_train_t, _ = model.train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
                 # d_train_t = model.new_train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
-                d_train_t = model.joint_train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
+                d_train_t = model.new_joint_train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
                 # d_train_reg_neg = model.regularization_step(neg_x.to(self.device), optimizer_reg=optimizer_reg, neg_sample = True, **kwargs)
                 # neg_x = model.sample(shape = z_shape, sample_step = model.ebm.sample_step,
                 #                                 device = self.device, replay = model.ebm.replay, apply_noise = True)
@@ -146,14 +149,12 @@ class BaseTrainer:
                 #     d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
                 # d_train_e = model.train_energy_step(x.to(self.device), optimizer_e=self.optimizer_e, pretrain = False, **kwargs)    
                 # update target network
-                tau_e = 0.005
-                for param, target_param_s, target_param_e in zip(model.encoder.parameters(), model.sigma.encoder.parameters(), model.ebm.net.encoder.parameters()):
-                    target_param_s.data.copy_(tau_e * param.data + (1 - tau_e) * target_param_s.data)
-                    target_param_e.data.copy_(tau_e * param.data + (1 - tau_e) * target_param_e.data)
-                tau_d = 1.0
-                for param, target_param_s, target_param_e in zip(model.decoder.parameters(), model.sigma.decoder.parameters(), model.ebm.net.decoder.parameters()):
-                    target_param_s.data.copy_(tau_d * param.data + (1 - tau_d) * target_param_s.data)
-                    target_param_e.data.copy_(tau_d * param.data + (1 - tau_d) * target_param_e.data)
+                # tau_e = 0.005
+                # for param, target_param_s in zip(model.encoder.parameters(), model.sigma.encoder.parameters()):
+                #     target_param_s.data.copy_(tau_e * param.data + (1 - tau_e) * target_param_s.data)
+                # tau_d = 1.0
+                # for param, target_param_s in zip(model.decoder.parameters(), model.sigma.decoder.parameters()):
+                #     target_param_s.data.copy_(tau_d * param.data + (1 - tau_d) * target_param_s.data)
 
                 time_meter.update(time.time() - start_ts)
                 if model.train_sigma:

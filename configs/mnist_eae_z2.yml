@@ -18,19 +18,29 @@ model:
   #   out_activation: 'sigmoid'
   #   img_size: [1, 28, 28]
   #   out_chan_num: 1
+  # sigma:
+  #   arch: fc_image
+  #   l_hidden: [256, 256, 256, 256, ]
+  #   activation: ['relu', 'relu', 'relu', 'relu', ]
+  #   out_activation: 'linear'
+  #   img_size: [1, 28, 28]
+  #   out_chan_num: 1
   encoder: 
-    arch: conv2fc 
-    nh: 8
-    nh_mlp: 1024
-    out_activation: linear 
+    arch: conv28
+    activation: relu
+    out_activation: linear
   decoder:
-    arch: deconv2
-    nh: 8
-    out_activation: sigmoid 
+    arch: dconv28
+    activation: relu
+    out_activation: sigmoid
+  sigma:
+    arch: conv28
+    activation: relu
+    out_activation: linear
   energy:
     n_layers: 2
-  sigma:
-    n_layers: 2
+  # sigma:
+  #   n_layers: 1
   # energy:
   #   arch: fc_image
   #   l_hidden: [1024, 1024, 1024, 1024, 1024] # [256, 256, 256, 256]
@@ -46,9 +56,9 @@ model:
   x_dim: 1
   z_dim: 15
   min_sigma_sq: 1e-5
-  max_sigma_sq: 1e-1
+  max_sigma_sq: 1.0
   energy_ae:
-    sigma_sq: 1e-2
+    sigma_sq: 10
     harmonic_pretrain: false
     energy_detach: True
     harmonic_detach: True
@@ -109,7 +119,7 @@ data:
   
 trainer: base
 training:
-  n_epoch: 200
+  n_epoch: 300
   n_epoch_pre: 30
   n_epoch_ebm: 10
   fix_decoder: False
@@ -117,11 +127,11 @@ training:
     name: 'adam'
     lr: 1e-4
   optimizer:
-    lr_encoder: 1e-5
+    lr_encoder: 3e-4
     lr_encoder_pre: 1e-4
-    lr_decoder: 1e-5
-    lr_energy: 1e-5
-    lr_sigma: 1e-5
+    lr_decoder: 3e-4
+    lr_energy: 3e-4
+    lr_sigma: 3e-4
   print_interval: 200
   val_interval: 200
   visualize_interval: 200

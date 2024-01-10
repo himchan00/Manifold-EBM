@@ -35,33 +35,36 @@ def jacobian_of_f(f, z, create_graph=True):
     )
     return out 
 
-def relaxed_volume_preserving_measure(func, z, eta=0.2, create_graph=True):
-    bs = len(z)
-    z_perm = z[torch.randperm(bs)]
-    if eta is not None:
-        alpha = (torch.rand(bs) * (1 + 2*eta) - eta).unsqueeze(1).to(z)
-        z_augmented = (alpha*z + (1-alpha)*z_perm)
-        z_augmented = z_augmented / z_augmented.norm(dim=-1, keepdim=True)
-    else:
-        z_augmented = z
-    bs, n = z.shape[0], z.shape[1]
-    # Projection matrix
-    X = z_augmented.unsqueeze(2).to(z)
-    X_t = X.permute(0, 2, 1).to(z)
-    P = torch.eye(n).repeat(bs, 1, 1).to(z) - torch.bmm(X, X_t).to(z)
-    J = jacobian_of_f(func, z_augmented, create_graph=create_graph)
-    JP = torch.bmm(J, P)
-    pullback_metric = JP.permute(0, 2, 1)@JP
-    # J = jacobian_of_f(func, z_augmented, create_graph=create_graph)
-    # pullback_metric = J.permute(0, 2, 1)@J
-    eig_vals = torch.linalg.eigvalsh(pullback_metric)
-    eig_vals = eig_vals[:, 1:]
-    logdet = torch.log(eig_vals).sum(dim=1)
-    logdet_sq = logdet**2
-    logdet_sq_mean = logdet_sq.mean()
-    logdet_mean = logdet.mean()
-    return logdet_sq_mean/logdet_mean**2
+def get_log_det_pullbacked_Riemannian_metric(func, z, create_graph=True):
+    J = jacobian_decoder_jvp_parallel(func, z, v=None, create_graph=create_graph)
+    G = torch.einsum('nij,nik->njk', J, J)
+    logdet = torch.logdet(G)
+    logdet[torch.isnan(logdet)] = 0
+    logdet[torch.isinf(logdet)] = 0
+    return logdet/2.0
 
+def jacobian_decoder_jvp_parallel(func, inputs, v=None, create_graph=True):
+    batch_size, z_dim = inputs.size()
+    if v is None:
+        v = torch.eye(z_dim).unsqueeze(0).repeat(batch_size, 1, 1).view(-1, z_dim).to(inputs)
+    inputs = inputs.repeat(1, z_dim).view(-1, z_dim)
+    jac = (
+        torch.autograd.functional.jvp(
+            func, inputs, v=v, create_graph=create_graph
+        )[1].view(batch_size, z_dim, -1).permute(0, 2, 1)
+    )
+    return jac
+
+def get_log_det_jacobian_new(f, z_samples, return_avg=True, create_graph=True):
+    J = jacobian_of_f(f, z_samples, create_graph=create_graph)
+    pullback_metric = J.permute(0, 2, 1)@J
+    logdet = torch.logdet(pullback_metric)
+    logdet[torch.isnan(logdet)] = 0
+    logdet[torch.isinf(logdet)] = 0
+    if return_avg:
+        return logdet.mean()/2.0
+    else:
+        return logdet/2.0
 
 def get_log_det_jacobian(f, z_samples, return_avg=True, training=True, create_graph=True):
     '''

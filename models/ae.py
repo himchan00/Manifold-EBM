@@ -7,12 +7,12 @@ from matplotlib import cm
 from torchvision.utils import make_grid
 from utils.utils import label_to_color, figure_to_array, PD_metric_to_ellipse
 from geometry import (
-    relaxed_volume_preserving_measure,
     get_pullbacked_Riemannian_metric,
     get_flattening_scores,
     get_log_det_jacobian,
     jacobian_of_f,
-    relaxed_distortion_measure
+    relaxed_distortion_measure,
+    get_log_det_pullbacked_Riemannian_metric,
 )
 from models.energy_based import sample_langevin_z_given_x
 
@@ -48,13 +48,13 @@ class AE(nn.Module):
 
 class EnergyAE(AE):
     def __init__(
-        self, encoder, decoder, ebm, sigma, sigma_sq=1e-4, harmonic_pretrain = True,
+        self, encoder, decoder, ebm, sigma, sigma_sq=None, harmonic_pretrain = True,
         energy_detach = True, harmonic_detach = True, 
         conformal_detach = True, reg = None, train_sigma = True
     ):
         super(EnergyAE, self).__init__(encoder, decoder)
         self.ebm = ebm
-        self.sigma_sq = sigma_sq
+        self.sigma_sq = torch.tensor(sigma_sq)
         self.harmonic_pretrain = harmonic_pretrain
         self.energy_detach = energy_detach
         self.harmonic_detach = harmonic_detach
@@ -150,16 +150,6 @@ class EnergyAE(AE):
                 # "AE/iso_loss_": iso_loss.item()
                     }
     
-    def train_energy_step(self, x, optimizer_e, pretrain = True, **kwargs):
-        optimizer_e.zero_grad()
-        z = self.encode(x).detach().clone()
-        energy_loss, _, pos_e, neg_e, _, neg_z_sample = self.ebm.energy_loss(z)
-        loss = energy_loss
-        loss.backward()
-        optimizer_e.step()
-        return {"loss": loss.item(), "EBM/pos_e_": pos_e.mean().item(), "EBM/neg_e_": neg_e.mean().item()}
-    
-
     def train_step(self, x, optimizer, neg_x = None, **kwargs):
 
         # for params in self.encoder.parameters():
@@ -235,85 +225,60 @@ class EnergyAE(AE):
                 
         }, neg_x.detach().clone()
 
-    def joint_train_step(self, x, optimizer, **kwargs):
+
+
+    def new_joint_train_step(self, x, optimizer, **kwargs):
         z = self.encode(x)
-        z_ = z.detach().clone()
         recon = self.decode(z)
-        sigma_sq = self.sigma.forward(z_, False).view(-1)
+        sigma_sq = self.sigma(recon).view(-1)
         pos_recon = ((recon - x) ** 2).view(len(x), -1).mean(dim=1)
-        neg_z = self.ebm.sample(shape=z.shape, sample_step = self.ebm.sample_step, device=z.device, replay=self.ebm.replay)
-        pos_e = self.ebm.forward(z_, False)/self.ebm.temperature
-        neg_e = self.ebm.forward(neg_z, False)/self.ebm.temperature
-        pos_log_det_jacobian = get_log_det_jacobian(self.decoder,z_, training=False, return_avg=False, create_graph=True)
-        neg_log_det_jacobian = get_log_det_jacobian(self.decoder, neg_z, training=False, return_avg=False, create_graph=True)
-        reg_loss = (pos_e**2).mean() + (neg_e**2).mean()
+        # neg_z = self.ebm.sample(shape=z.shape, sample_step = self.ebm.sample_step, device=z.device, replay=self.ebm.replay)
+        # pos_e = self.ebm.forward(z_, False)/self.ebm.temperature
+        # neg_e = self.ebm.forward(neg_z, False)/self.ebm.temperature
+        pos_e = (z**2).sum(dim = 1) / (2*self.sigma_sq)
+        pos_log_det_jacobian = get_log_det_pullbacked_Riemannian_metric(self.decoder, z, create_graph=True)
         D = torch.prod(torch.tensor(x.shape[1:]))
-        D_eff = D - self.encoder.z_dim + 1
-        loss = (pos_recon / (2 * sigma_sq) + D_eff/D * torch.log(sigma_sq)/2 + (pos_e + pos_log_det_jacobian - neg_e - neg_log_det_jacobian)/D).mean()
-        loss += self.ebm.gamma * reg_loss/D
+        D_eff = D - self.encoder.out_chan
+        loss = (pos_recon / (2 * sigma_sq) + D_eff/D * torch.log(sigma_sq)/2 + (pos_log_det_jacobian + pos_e)/D).mean()
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         return {"loss": loss.item(),
                 "AE/pos_recon_": pos_recon.mean().item(), 
                 "AE/pos_e_": pos_e.mean().item(),
-                "AE/neg_e_": neg_e.mean().item(),
+                # "AE/neg_e_": neg_e.mean().item(),
                 "AE/pos_log_det_jacobian_": pos_log_det_jacobian.mean().item(),
-                "AE/neg_log_det_jacobian_": neg_log_det_jacobian.mean().item(),
+                #"AE/neg_log_det_jacobian_": neg_log_det_jacobian.mean().item(),
                 "AE/sigma_sq_": sigma_sq.mean().item()}
 
-    def new_train_step(self, x, optimizer, **kwargs):
-        z = self.encode(x).detach().clone()
-        recon = self.decode(z)
-        sigma_sq = self.sigma.forward(z, False).view(-1)
-        pos_recon = ((recon - x) ** 2).view(len(x), -1).mean(dim=1)
-        neg_z = self.ebm.sample(shape=z.shape, sample_step = self.ebm.sample_step, device=z.device, replay=self.ebm.replay)
-        pos_e = self.ebm.forward(z, False)/self.ebm.temperature
-        neg_e = self.ebm.forward(neg_z, False)/self.ebm.temperature
-        pos_log_det_jacobian = get_log_det_jacobian(self.decoder,z, training=False, return_avg=False, create_graph=True)
-        neg_log_det_jacobian = get_log_det_jacobian(self.decoder, neg_z, training=False, return_avg=False, create_graph=True)
-        reg_loss = (pos_e**2).mean() + (neg_e**2).mean()
-        D = torch.prod(torch.tensor(x.shape[1:]))
-        D_eff = D - self.encoder.z_dim + 1
-        loss = (pos_recon / (2 * sigma_sq) + D_eff / D *torch.log(sigma_sq)/2 + (pos_e + pos_log_det_jacobian - neg_e - neg_log_det_jacobian)/D).mean()
-        loss += self.ebm.gamma * reg_loss/D
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        return {"loss": loss.item(),
-                "AE/pos_recon_": pos_recon.mean().item(), 
-                "AE/pos_e_": pos_e.mean().item(),
-                "AE/neg_e_": neg_e.mean().item(),
-                "AE/pos_log_det_jacobian_": pos_log_det_jacobian.mean().item(),
-                "AE/neg_log_det_jacobian_": neg_log_det_jacobian.mean().item(),
-                "AE/sigma_sq_": sigma_sq.mean().item()}
     
     def sample(self, shape, sample_step, device, replay=True, apply_noise = True):
         # sample from latent space
-        z = self.ebm.sample(shape=shape, sample_step = sample_step, device=device, replay=replay)
+        # z = self.ebm.sample(shape=shape, sample_step = sample_step, device=device, replay=replay)
+        z = torch.randn(shape).to(device) * torch.sqrt(self.sigma_sq)
         # decode
         with torch.no_grad():
             x = self.decode(z)
             if apply_noise:
-                    sigma_sq = self.sigma(z)
+                    sigma_sq = self.sigma(x)
                     x = x + torch.randn_like(x) * torch.sqrt(sigma_sq).unsqueeze(1).unsqueeze(1)
         
         return x
     
     def neg_log_prob(self, x, pretrain = False):
         D = torch.prod(torch.tensor(x.shape[1:]))
-        D_eff = D - self.encoder.z_dim + 1
+        D_eff = D - self.encoder.out_chan
         with torch.no_grad():
             z = self.encode(x)
             recon = self.decode(z)
-            energy = self.ebm(z, False)/self.ebm.temperature
+            # energy = self.ebm(z, False)/self.ebm.temperature
             if self.train_sigma:
-                sigma_sq = self.sigma(z, False).view(-1)
+                sigma_sq = self.sigma(recon).view(-1)
             else:
                 sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
-            # energy = (z**2).sum(dim = 1) / 2
+            energy = (z**2).sum(dim = 1) / (2*self.sigma_sq)
             
-        log_det_jacobian = get_log_det_jacobian(self.decoder, z.detach(), return_avg= False, training=False, create_graph=False)
+        log_det_jacobian = get_log_det_pullbacked_Riemannian_metric(self.decoder, z.detach(), create_graph = False)
         recon_error = ((recon - x) ** 2).view(len(x), -1).mean(dim=1)
         neg_log_prob = recon_error/(2 * (sigma_sq)) + D_eff / D * torch.log(sigma_sq)/2 + (energy + log_det_jacobian)/D 
         return {"neg_log_prob": neg_log_prob, "recon_error": recon_error,
