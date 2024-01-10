@@ -85,8 +85,8 @@ def run(cfg, writer):
                             # {'params': model.sigma_net.parameters(), 'lr': cfg.training.optimizer['lr_sigma']}
                             # {'params': model.ebm.parameters(), 'lr': cfg.training.optimizer['lr_energy']}
                             ])
-    optimizer_e = optim.Adam([{'params': model.ebm.net.fc_nets.parameters(), 'lr': cfg.training.optimizer['lr_energy']}])
-
+    # optimizer_e = optim.Adam([{'params': model.ebm.net.fc_nets.parameters(), 'lr': cfg.training.optimizer['lr_energy']}])
+    optimizer_e = None
     # Setup Trainer
     trainer = get_trainer(optimizer, optimizer_pre, optimizer_e,  cfg)
     model, train_result = trainer.train(

@@ -4,39 +4,39 @@ logger:
   endwith: ['@']
 model:
   arch: eae 
-  # encoder:
-  #   arch: fc_image
-  #   l_hidden: [256, 256, 256, 256, ]
-  #   activation: ['relu', 'relu', 'relu', 'relu', ]
-  #   out_activation: 'linear'
-  #   img_size: [1, 28, 28]
-  #   out_chan_num: 1
-  # decoder:
-  #   arch: fc_image
-  #   l_hidden: [256, 256, 256, 256, ]
-  #   activation: ['relu', 'relu', 'relu', 'relu', ]
-  #   out_activation: 'sigmoid'
-  #   img_size: [1, 28, 28]
-  #   out_chan_num: 1
-  # sigma:
-  #   arch: fc_image
-  #   l_hidden: [256, 256, 256, 256, ]
-  #   activation: ['relu', 'relu', 'relu', 'relu', ]
-  #   out_activation: 'linear'
-  #   img_size: [1, 28, 28]
-  #   out_chan_num: 1
-  encoder: 
-    arch: conv28
-    activation: relu
-    out_activation: linear
+  encoder:
+    arch: fc_image
+    l_hidden: [256, 256, 256, 256, ]
+    activation: ['relu', 'relu', 'relu', 'relu', ]
+    out_activation: 'linear'
+    img_size: [1, 28, 28]
+    out_chan_num: 1
   decoder:
-    arch: dconv28
-    activation: relu
-    out_activation: sigmoid
+    arch: fc_image
+    l_hidden: [256, 256, 256, 256, ]
+    activation: ['relu', 'relu', 'relu', 'relu', ]
+    out_activation: 'sigmoid'
+    img_size: [1, 28, 28]
+    out_chan_num: 1
   sigma:
-    arch: conv28
-    activation: relu
-    out_activation: linear
+    arch: fc_image
+    l_hidden: [256, 256, 256, 256, ]
+    activation: ['relu', 'relu', 'relu', 'relu', ]
+    out_activation: 'linear'
+    img_size: [1, 28, 28]
+    out_chan_num: 1
+  # encoder: 
+  #   arch: conv28
+  #   activation: relu
+  #   out_activation: linear
+  # decoder:
+  #   arch: dconv28
+  #   activation: relu
+  #   out_activation: sigmoid
+  # sigma:
+  #   arch: conv28
+  #   activation: relu
+  #   out_activation: linear
   energy:
     n_layers: 2
   # sigma:
@@ -53,7 +53,7 @@ model:
   #   activation: ['relu', 'relu', 'relu', 'relu' , 'relu' ]
   #   out_activation: 'sigmoid'
   #   out_chan_num: 1
-  x_dim: 1
+  x_dim: 784
   z_dim: 15
   min_sigma_sq: 1e-5
   max_sigma_sq: 1.0
@@ -119,19 +119,21 @@ data:
   
 trainer: base
 training:
-  n_epoch: 300
-  n_epoch_pre: 30
+  n_epoch: 3000
+  n_epoch_pre: 100
   n_epoch_ebm: 10
   fix_decoder: False
   optimizer_pre:
     name: 'adam'
     lr: 1e-4
   optimizer:
-    lr_encoder: 3e-4
+    lr_encoder: 1e-4
     lr_encoder_pre: 1e-4
-    lr_decoder: 3e-4
-    lr_energy: 3e-4
-    lr_sigma: 3e-4
+    lr_decoder_pre: 1e-4
+    lr_sigma_pre: 1e-4
+    lr_decoder: 1e-4
+    lr_energy: 1e-5
+    lr_sigma: 1e-4
   print_interval: 200
   val_interval: 200
   visualize_interval: 200

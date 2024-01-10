@@ -13,6 +13,7 @@ from geometry import (
     jacobian_of_f,
     relaxed_distortion_measure,
     get_log_det_pullbacked_Riemannian_metric,
+    get_log_det_jacobian_new,
 )
 from models.energy_based import sample_langevin_z_given_x
 
@@ -48,12 +49,11 @@ class AE(nn.Module):
 
 class EnergyAE(AE):
     def __init__(
-        self, encoder, decoder, ebm, sigma, sigma_sq=None, harmonic_pretrain = True,
+        self, encoder, decoder, sigma, sigma_sq=None, harmonic_pretrain = True,
         energy_detach = True, harmonic_detach = True, 
         conformal_detach = True, reg = None, train_sigma = True
     ):
         super(EnergyAE, self).__init__(encoder, decoder)
-        self.ebm = ebm
         self.sigma_sq = torch.tensor(sigma_sq)
         self.harmonic_pretrain = harmonic_pretrain
         self.energy_detach = energy_detach
@@ -62,17 +62,6 @@ class EnergyAE(AE):
         self.reg = reg
         self.train_sigma = train_sigma
         self.sigma = sigma
-
-    def regularization_step(self, x, optimizer_reg, neg_sample = False, **kwargs):
-        optimizer_reg.zero_grad()
-        z = self.encode(x)
-        loss = relaxed_volume_preserving_measure(self.decoder, z, eta=0.2)
-        loss.backward()
-        optimizer_reg.step()
-        if neg_sample:
-            return {"AE/neg_iso_loss_": loss.item()}
-        else:
-            return {"AE/pos_iso_loss_": loss.item()}
 
 
     def pretrain_step(self, x, optimizer_pre, pretrain  = True, neg_sample = False, **kwargs):
@@ -236,7 +225,7 @@ class EnergyAE(AE):
         # pos_e = self.ebm.forward(z_, False)/self.ebm.temperature
         # neg_e = self.ebm.forward(neg_z, False)/self.ebm.temperature
         pos_e = (z**2).sum(dim = 1) / (2*self.sigma_sq)
-        pos_log_det_jacobian = get_log_det_pullbacked_Riemannian_metric(self.decoder, z, create_graph=True)
+        pos_log_det_jacobian = get_log_det_jacobian_new(self.decoder, z, create_graph=True)
         D = torch.prod(torch.tensor(x.shape[1:]))
         D_eff = D - self.encoder.out_chan
         loss = (pos_recon / (2 * sigma_sq) + D_eff/D * torch.log(sigma_sq)/2 + (pos_log_det_jacobian + pos_e)/D).mean()
@@ -252,7 +241,7 @@ class EnergyAE(AE):
                 "AE/sigma_sq_": sigma_sq.mean().item()}
 
     
-    def sample(self, shape, sample_step, device, replay=True, apply_noise = True):
+    def sample(self, shape, device,apply_noise = True):
         # sample from latent space
         # z = self.ebm.sample(shape=shape, sample_step = sample_step, device=device, replay=replay)
         z = torch.randn(shape).to(device) * torch.sqrt(self.sigma_sq)
@@ -278,7 +267,7 @@ class EnergyAE(AE):
                 sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
             energy = (z**2).sum(dim = 1) / (2*self.sigma_sq)
             
-        log_det_jacobian = get_log_det_pullbacked_Riemannian_metric(self.decoder, z.detach(), create_graph = False)
+        log_det_jacobian = get_log_det_jacobian_new(self.decoder, z.detach(), create_graph = False)
         recon_error = ((recon - x) ** 2).view(len(x), -1).mean(dim=1)
         neg_log_prob = recon_error/(2 * (sigma_sq)) + D_eff / D * torch.log(sigma_sq)/2 + (energy + log_det_jacobian)/D 
         return {"neg_log_prob": neg_log_prob, "recon_error": recon_error,
@@ -303,7 +292,7 @@ class EnergyAE(AE):
         x_img = make_grid(x.detach().cpu(), nrow=num_each_axis, value_range=(0, 1), pad_value=1)
         recon_img = make_grid(recon.detach().cpu(), nrow=num_each_axis, value_range=(0, 1), pad_value=1)
         if procedure == 'train_energy' or procedure == "train":
-            sampled_x = self.sample(shape = z.shape, sample_step = self.ebm.sample_step, device=device, replay=self.ebm.replay)
+            sampled_x = self.sample(shape = z.shape, device=device)
             sampled_img = make_grid(sampled_x.detach().cpu(), nrow=num_each_axis, value_range=(0, 1), pad_value=1)
         
         if z.shape[1] == 3:

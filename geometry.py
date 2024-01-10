@@ -55,7 +55,7 @@ def jacobian_decoder_jvp_parallel(func, inputs, v=None, create_graph=True):
     )
     return jac
 
-def get_log_det_jacobian_new(f, z_samples, return_avg=True, create_graph=True):
+def get_log_det_jacobian_new(f, z_samples, return_avg=False, create_graph=True):
     J = jacobian_of_f(f, z_samples, create_graph=create_graph)
     pullback_metric = J.permute(0, 2, 1)@J
     logdet = torch.logdet(pullback_metric)
