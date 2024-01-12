@@ -281,35 +281,34 @@ class energy_net(nn.Module):
         return x
 
 class sigma_net(nn.Module):
-    def __init__(self, encoder, decoder, nh_mlp = 512, n_layers = 3, min_sigma_sq = 1e-4, max_sigma_sq = 1e-2):
+    def __init__(self, net, decoder, min_sigma_sq = 1e-4, max_sigma_sq = 1e-2):
         super().__init__()
-        self.encoder = encoder
+        self.net = net
         self.decoder = decoder
         self.min = torch.log(torch.tensor(min_sigma_sq))
         self.max = torch.log(torch.tensor(max_sigma_sq))
         self.min.requires_grad = False
         self.max.requires_grad = False
-        l_layer = []
-        for _ in range(n_layers-1):
-            l_layer.append(nn.Linear(nh_mlp, nh_mlp))
-            l_layer.append(nn.ReLU())
-        l_layer.append(nn.Linear(nh_mlp, 1))
-        self.fc_nets = nn.Sequential(*l_layer)
 
-    def forward(self, z, grad = True):
-        with torch.no_grad():
-            x_bar = self.decoder(z)
-        x = self.encoder.get_feature(x_bar, grad=grad).squeeze(2).squeeze(2)
-        x = self.fc_nets(x)
-        x = torch.sigmoid(x)
-        x = torch.exp(self.min + (self.max - self.min) * x)
+    def forward(self, z):
+        x = self.decoder(z)
+        x = self.net(x)
+        x = torch.exp(x)
         return x
 
-    def forward_with_x(self, x, grad = True):
-        x = self.encoder.get_feature(x, grad=grad).squeeze(2).squeeze(2)
-        x = self.fc_nets(x)
-        x = torch.sigmoid(x)
-        x = torch.exp(self.min + (self.max - self.min) * x)
+    def forward_with_x(self, x):
+        x = self.net(x)
+        x = torch.exp(x)
+        return x
+
+class new_sigma_net(nn.Module):
+    def __init__(self, net):
+        super().__init__()
+        self.net = net
+    
+    def forward(self, z):
+        x = self.net(z)
+        x = torch.exp(x)
         return x
 
 class ConvNet2FC(nn.Module):

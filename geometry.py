@@ -1,28 +1,38 @@
 import torch
 
-def relaxed_distortion_measure(func, z, eta=0.2, metric='identity', create_graph=True):
-    if metric == 'identity':
-        bs = len(z)
-        z_perm = z[torch.randperm(bs)]
-        if eta is not None:
-            alpha = (torch.rand(bs) * (1 + 2*eta) - eta).unsqueeze(1).to(z)
-            z_augmented = (alpha*z + (1-alpha)*z_perm)
-            z_augmented = z_augmented / z_augmented.norm(dim=-1, keepdim=True)
-        else:
-            z_augmented = z
-        bs, n = z.shape[0], z.shape[1]
-        # Projection matrix
-        X = z.unsqueeze(2).to(z)
-        X_t = X.permute(0, 2, 1).to(z)
-        P = torch.eye(n).repeat(bs, 1, 1).to(z) - torch.bmm(X, X_t).to(z)
-        v = (P @ torch.randn(z.size()).to(z).unsqueeze(-1)).squeeze(-1)
-        Jv = torch.autograd.functional.jvp(func, z_augmented, v=v, create_graph=create_graph)[1]
-        TrG = torch.sum(Jv.view(bs, -1)**2, dim=1).mean()
-        JTJv = (torch.autograd.functional.vjp(func, z_augmented, v=Jv, create_graph=create_graph)[1]).view(bs, -1)
-        TrG2 = torch.sum(JTJv**2, dim=1).mean()
-        return TrG2/TrG**2
-    else:
-        raise NotImplementedError
+def relaxed_distortion_measure(func, z, eta=0.2, create_graph=True):
+    '''
+    func: decoder that maps "latent value z" to "data", where z.size() == (batch_size, latent_dim)
+    '''
+    bs = len(z)
+    z_perm = z[torch.randperm(bs)]
+    alpha = (torch.rand(bs) * (1 + 2*eta) - eta).unsqueeze(1).to(z)
+    z_augmented = alpha*z + (1-alpha)*z_perm
+    v = torch.randn(z.size()).to(z)
+    Jv = torch.autograd.functional.jvp(
+        func, z_augmented, v=v, create_graph=create_graph)[1]
+    TrG = torch.sum(Jv.view(bs, -1)**2, dim=1).mean()
+    JTJv = (torch.autograd.functional.vjp(
+        func, z_augmented, v=Jv, create_graph=create_graph)[1]).view(bs, -1)
+    TrG2 = torch.sum(JTJv**2, dim=1).mean()
+    return TrG2/TrG**2
+
+def conformal_distortion_measure(func, z, eta=0.2, create_graph=True):
+    '''
+    func: decoder that maps "latent value z" to "data", where z.size() == (batch_size, latent_dim)
+    '''
+    bs = len(z)
+    z_perm = z[torch.randperm(bs)]
+    alpha = (torch.rand(bs) * (1 + 2*eta) - eta).unsqueeze(1).to(z)
+    z_augmented = alpha*z + (1-alpha)*z_perm
+    v = torch.randn(z.size()).to(z)
+    Jv = torch.autograd.functional.jvp(
+        func, z_augmented, v=v, create_graph=create_graph)[1]
+    TrG = torch.mean(Jv.view(bs, -1)**2, dim=1) # (bs,)
+    JTJv = (torch.autograd.functional.vjp(
+        func, z_augmented, v=Jv, create_graph=create_graph)[1]).view(bs, -1)
+    TrG2 = torch.mean(JTJv**2, dim=1) # (bs,)
+    return TrG2/TrG**2
     
 def jacobian_of_f(f, z, create_graph=True):
     batch_size, z_dim = z.size()
@@ -62,6 +72,12 @@ def relaxed_volume_preserving_measure(func, z, eta=0.2, create_graph=True):
     logdet_mean = logdet.mean()
     return logdet_sq_mean/logdet_mean**2
 
+def get_log_det_jacobian_new(f, z_samples, create_graph=True):
+    G = get_pullbacked_Riemannian_metric(f, z_samples, create_graph)
+    logdet = torch.logdet(G)
+    logdet[torch.isnan(logdet)] = 0
+    logdet[torch.isinf(logdet)] = 0
+    return logdet/2.0
 
 def get_log_det_jacobian(f, z_samples, return_avg=True, training=True, create_graph=True):
     '''
@@ -124,8 +140,24 @@ def jacobian_decoder_jvp_parallel(func, inputs, v=None, create_graph=True):
     )
     return jac
 
-def get_pullbacked_Riemannian_metric(func, z):
-    J = jacobian_decoder_jvp_parallel(func, z, v=None)
+def get_pullbacked_Riemannian_metric(func, z, create_graph=True):
+    J = jacobian_decoder_jvp_parallel(func, z, v=None, create_graph=create_graph)
     G = torch.einsum('nij,nik->njk', J, J)
     return G
 
+def get_projection_matrix(func, z, create_graph = True):
+    J = jacobian_of_f(func, z, create_graph=create_graph)
+    pull_back_metric = J.permute(0, 2, 1)@J
+    inverse_pull_back_metric = torch.pinverse(pull_back_metric)
+    projection_matrix = J @ inverse_pull_back_metric @ J.permute(0, 2, 1)
+    return projection_matrix
+
+def get_projection_coord_rep(func, z, x, create_graph = True):
+    J = jacobian_of_f(func, z, create_graph=create_graph)
+    J_column_norm_sq = torch.sum(J**2, dim=1)
+    pull_back_metric = J.permute(0, 2, 1)@J
+    inverse_pull_back_metric = torch.linalg.pinv(pull_back_metric, hermitian=True)
+    coord_rep = inverse_pull_back_metric @ J.permute(0, 2, 1)
+    coord_rep_x = coord_rep @ x.unsqueeze(-1)
+    projection_matrix = J @ coord_rep
+    return projection_matrix, coord_rep_x.squeeze(-1), J_column_norm_sq
