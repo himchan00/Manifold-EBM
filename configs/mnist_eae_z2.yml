@@ -6,74 +6,65 @@ model:
   arch: eae 
   encoder:
     arch: fc_image
-    l_hidden: [256, 256, 256, 256, ]
-    activation: ['relu', 'relu', 'relu', 'relu', ]
+    l_hidden:  [1024, 1024, 1024, 1024,1024]
+    activation: ['relu', 'relu', 'relu', 'relu', 'relu']
     out_activation: 'linear'
     img_size: [1, 28, 28]
     out_chan_num: 1
   decoder:
     arch: fc_image
-    l_hidden: [256, 256, 256, 256, ]
+    l_hidden:  [1024, 1024, 1024, 1024,]
     activation: ['relu', 'relu', 'relu', 'relu', ]
     out_activation: 'sigmoid'
     img_size: [1, 28, 28]
     out_chan_num: 1
-  sigma:
-    arch: fc_image
-    l_hidden: [256, 256, 256, 256, ]
-    activation: ['relu', 'relu', 'relu', 'relu', ]
-    out_activation: 'linear'
-    img_size: [1, 28, 28]
-    out_chan_num: 1
   # encoder: 
-  #   arch: conv28
-  #   activation: relu
-  #   out_activation: linear
+  #   arch: conv2fc 
+  #   nh: 8
+  #   nh_mlp: 1024
+  #   out_activation: linear 
   # decoder:
-  #   arch: dconv28
-  #   activation: relu
-  #   out_activation: sigmoid
-  # sigma:
-  #   arch: conv28
-  #   activation: relu
-  #   out_activation: linear
+  #   arch: deconv2
+  #   nh: 8
+  #   out_activation: sigmoid 
   energy:
     n_layers: 2
   # sigma:
-  #   n_layers: 1
+  #   arch: conv28
+  #   activation: relu
+  #   out_activation: linear
   # energy:
   #   arch: fc_image
   #   l_hidden: [1024, 1024, 1024, 1024, 1024] # [256, 256, 256, 256]
   #   activation: ['relu', 'relu', 'relu', 'relu', 'relu']
   #   out_activation: 'linear'
   #   out_chan_num: 1
-  # sigma:
-  #   arch: fc_image
-  #   l_hidden: [1024, 1024, 1024, 1024, 1024] # [256, 256, 256, 256, 256]
-  #   activation: ['relu', 'relu', 'relu', 'relu' , 'relu' ]
-  #   out_activation: 'sigmoid'
-  #   out_chan_num: 1
+  sigma:
+    arch: fc_vec
+    l_hidden: [1024, 1024, 1024, 1024,] # [256, 256, 256, 256, 256]
+    activation: ['relu', 'relu', 'relu', 'relu']
+    out_activation: 'linear'
+    img_size: [1, 28, 28]
+    out_chan_num: 1
   x_dim: 784
-  z_dim: 15
+  z_dim: 16
   min_sigma_sq: 1e-5
-  max_sigma_sq: 1.0
+  max_sigma_sq: 1
   energy_ae:
-    sigma_sq: 10
+    sigma_sq: 1e-2
     harmonic_pretrain: false
     energy_detach: True
     harmonic_detach: True
     conformal_detach: false
     train_sigma: True
   ebm:
-    gamma: 0.01
+    gamma: 0.0
     temperature: 0.01
     step_size: 0.001
     noise_scale: null
     sample_step: 100
     buffer_size: 10000
     replay_ratio: 0.95
-    conditional_step_size: null
-    conditional_sample_step: null
     langevin_clip_grad: Null
 data:
   training:
@@ -83,7 +74,7 @@ data:
     n_workers: 4
     split: training
     shuffle: True
-    digits: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    digits: [0, 2, 3, 4, 5, 6, 7, 8, 9]
   validation:
     dataset: MNIST
     root: dataset
@@ -91,7 +82,7 @@ data:
     n_workers: 4
     split: validation
     shuffle: False
-    digits: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    digits: [0, 2, 3, 4, 5, 6, 7, 8, 9]
   test:
     dataset: MNIST
     root: dataset
@@ -99,7 +90,7 @@ data:
     n_workers: 4
     split: test
     shuffle: False
-    digits: [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    digits: [0, 2, 3, 4, 5, 6, 7, 8, 9]
   OOD_validation:
     dataset: MNIST
     root: dataset
@@ -107,7 +98,7 @@ data:
     n_workers: 4
     split: validation
     shuffle: False
-    digits: [9]
+    digits: [1]
   OOD_test:
     dataset: MNIST
     root: dataset
@@ -115,24 +106,22 @@ data:
     n_workers: 4
     split: test
     shuffle: False
-    digits: [9]
+    digits: [1]
   
 trainer: base
 training:
-  n_epoch: 3000
+  n_epoch: 2000
   n_epoch_pre: 100
-  n_epoch_ebm: 10
-  fix_decoder: False
+  n_epoch_ebm: 30
+  fix_decoder: false
   optimizer_pre:
     name: 'adam'
     lr: 1e-4
   optimizer:
     lr_encoder: 1e-4
     lr_encoder_pre: 1e-4
-    lr_decoder_pre: 1e-4
-    lr_sigma_pre: 1e-4
     lr_decoder: 1e-4
-    lr_energy: 1e-5
+    lr_energy: 1e-3
     lr_sigma: 1e-4
   print_interval: 200
   val_interval: 200

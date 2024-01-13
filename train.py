@@ -87,6 +87,7 @@ def run(cfg, writer):
                             ])
     # optimizer_e = optim.Adam([{'params': model.ebm.net.fc_nets.parameters(), 'lr': cfg.training.optimizer['lr_energy']}])
     optimizer_e = None
+
     # Setup Trainer
     trainer = get_trainer(optimizer, optimizer_pre, optimizer_e,  cfg)
     model, train_result = trainer.train(

@@ -16,6 +16,7 @@ from models.modules import (
     DeConvNet28,
     ConvNet2FC,
     DeConvNet2,
+    DeConvNet3,
 )
 
 def get_net(in_dim, out_dim, **kwargs):
@@ -33,7 +34,7 @@ def get_net(in_dim, out_dim, **kwargs):
         )
 
     elif kwargs["arch"] == "deconv2":
-        net = DeConvNet2(
+        net = DeConvNet3(
             in_chan=in_dim, out_chan=out_dim, nh=nh, out_activation=out_activation
         )
     if kwargs["arch"] == "fc_vec":
@@ -61,13 +62,13 @@ def get_net(in_dim, out_dim, **kwargs):
             out_chan_num=out_chan_num
         )
     elif kwargs["arch"] == "conv28":
-        activation = kwargs["activation"]
-        out_activation = kwargs["out_activation"]
+        nh_mlp = 1024
         net = ConvNet28(
             in_chan=in_dim,
             out_chan=out_dim,
-            activation=activation,
-            out_activation=out_activation
+            nh=nh,
+            nh_mlp=nh_mlp,
+            out_activation=out_activation,
         )
     elif kwargs["arch"] == "dconv28":
         activation = kwargs["activation"]
@@ -97,15 +98,17 @@ def get_ae(**model_cfg):
         decoder = get_net(in_dim=z_dim, out_dim=x_dim, **model_cfg["decoder"])
         model = IRVAE(encoder, IsotropicGaussian(decoder), iso_reg=iso_reg, metric=metric)
     elif arch == "eae":
-        from models.modules import normalized_net, energy_net, sigma_net, sigma_net_normalizer
-        encoder = get_net(in_dim=x_dim, out_dim=z_dim+1, **model_cfg["encoder"])
-        decoder = get_net(in_dim=z_dim+1, out_dim=x_dim, **model_cfg["decoder"])
-        # sigma = sigma_net(encoder, decoder, 256, model_cfg["sigma"]["n_layers"], min_sigma_sq, max_sigma_sq)
-        sigma = sigma_net_normalizer(get_net(in_dim=x_dim, out_dim=1, **model_cfg["sigma"]), min_sigma_sq, max_sigma_sq)
-        # energy = energy_net(encoder, decoder, 256, model_cfg["energy"]["n_layers"])
-        # from models.energy_based import EnergyBasedModel
+        from models.modules import normalized_net, energy_net, sigma_net, new_sigma_net, FC_for_decoder_and_sigma
+        encoder = get_net(in_dim=x_dim, out_dim=z_dim*2, **model_cfg["encoder"])
+        # decoder = get_net(in_dim=z_dim, out_dim=x_dim, **model_cfg["decoder"])
+        decoder = FC_for_decoder_and_sigma(z_dim=z_dim, x_dim=x_dim)
+        # sigma = sigma_net(get_net(in_dim=x_dim, out_dim=z_dim + 1, **model_cfg["sigma"]), decoder, min_sigma_sq, max_sigma_sq)
+        sigma = new_sigma_net(get_net(in_dim = z_dim, out_dim = z_dim + 1, **model_cfg["sigma"]))
+        # energy = energy_net(encoder, decoder, model_cfg["encoder"]["nh_mlp"], model_cfg["energy"]["n_layers"])
+        from models.energy_based import EnergyBasedModel
         # ebm = EnergyBasedModel(energy, **model_cfg["ebm"])
-        model = EnergyAE(encoder, decoder, sigma, **model_cfg["energy_ae"])
+        ebm = None
+        model = EnergyAE(encoder, decoder, ebm, sigma, **model_cfg["energy_ae"])
     return model
 
 def get_model(cfg, *args, version=None, **kwargs):

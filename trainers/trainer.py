@@ -6,7 +6,6 @@ import numpy as np
 import torch
 from metrics import averageMeter
 from utils.utils import roc_btw_arr
-from models.energy_based import sample_langevin_z_given_x
 
 class BaseTrainer:
     """Trainer for a conventional iterative training of model for classification"""
@@ -29,9 +28,6 @@ class BaseTrainer:
         kwargs = {'dataset_size': len(train_loader.dataset)}
         i_iter = 0
         best_val_loss = np.inf
-        bs = train_loader.batch_size
-        z_dim = model.encoder.out_chan
-        z_shape = (bs, z_dim)
         # model.encoder.load_state_dict(torch.load("pretrained/encoder_ho_9_z_dim_15.pth"))
         # model.decoder.load_state_dict(torch.load("pretrained/decoder_ho_9_z_dim_15.pth"))
         # for i_epoch in range(1, cfg['n_epoch_pre'] + 1):
@@ -68,8 +64,8 @@ class BaseTrainer:
         #             logger.add_val(i_iter, d_val)                   
         #         i_iter += 1 # added
         
-        # torch.save(model.encoder.state_dict(), "pretrained/encoder_ho_3_z_dim_15_epoch_30.pth")
-        # torch.save(model.decoder.state_dict(), "pretrained/decoder_ho_3_z_dim_15_epoch_30.pth")
+        # torch.save(model.encoder.state_dict(), "pretrained/encoder_ho_9_z_dim_15.pth")
+        # torch.save(model.decoder.state_dict(), "pretrained/decoder_ho_9_z_dim_15.pth")
         # for i_epoch in range(1, cfg['n_epoch_ebm'] + 1):
         #     for x, _ in train_loader:
         #         model.train()
@@ -83,23 +79,21 @@ class BaseTrainer:
         #             d_val = model.visualization_step(train_loader, procedure = "train_energy", device=self.device)
         #             logger.add_val(i_iter, d_val)
         #         i_iter += 1
-        # torch.save(model.ebm.net.fc_nets.state_dict(), "pretrained/ebm_ho_9_z_dim_15_epoch_10.pth")
+        # torch.save(model.ebm.net.fc_nets.state_dict(), "pretrained/ebm_ho_9_z_dim_15.pth")
         # model.ebm.net.fc_nets.load_state_dict(torch.load("pretrained/ebm_ho_9_z_dim_15.pth"))
-        # model.sigma.encoder = copy.deepcopy(model.encoder)
-        # model.sigma.decoder = copy.deepcopy(model.decoder)
 
+        # model.sigma.decoder = copy.deepcopy(model.decoder)
         if not cfg['fix_decoder']:
             self.optimizer_pre = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
-                                           # {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']}
+                                            {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
+                                            # {'params': model.sigma.parameters(), 'lr': cfg.optimizer['lr_sigma']},
+                                            
                             ])
             
             if model.train_sigma:
-                optimizer = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
+                optimizer = optim.Adam([#{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_energy']},
                                         {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
-                                        # {'params': model.sigma.fc_nets.parameters(), 'lr': cfg.optimizer['lr_sigma']},
-                                        # {'params': model.sigma.encoder.parameters(), 'lr': cfg.optimizer['lr_sigma']},
-                                        {'params': model.sigma.parameters(), 'lr': cfg.optimizer['lr_sigma']},
-                                         #{'params': model.ebm.net.fc_nets.parameters(), 'lr': cfg.optimizer['lr_energy']}
+                                        {'params': model.sigma.net.parameters(), 'lr': cfg.optimizer['lr_sigma']},
                                         ])
             else:
                 optimizer = optim.Adam([#{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
@@ -123,42 +117,48 @@ class BaseTrainer:
                 #                         ])
                 optimizer = None
 
-        # model.ebm.net.encoder = copy.deepcopy(model.encoder.net)
-        # model.ebm.net.decoder = copy.deepcopy(model.decoder)
+        # model.encoder.load_state_dict(torch.load("pretrained/encoder_vae_ho_1.pth"))
+        # model.decoder.load_state_dict(torch.load("pretrained/decoder_vae_ho_1.pth"))
+        # model.sigma.net.load_state_dict(torch.load("pretrained/sigma_vae_ho_1.pth"))
+
+
 
         self.optimizer = optimizer
         for i_epoch in range(1, cfg['n_epoch'] + 1):
             for x, _ in train_loader:
                 model.train()
                 start_ts = time.time()
-                
-                # neg_x = model.sample(shape = z_shape, sample_step = model.ebm.sample_step,
-                #                                device = self.device, replay = model.ebm.replay)
-                #d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =True, **kwargs)
-                #d_train_p_neg = model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, neg_sample = True, **kwargs)
-                #d_train_t, _ = model.train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
-                # d_train_t = model.new_train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
-                d_train_t = model.new_joint_train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
-                # d_train_reg_neg = model.regularization_step(neg_x.to(self.device), optimizer_reg=optimizer_reg, neg_sample = True, **kwargs)
-                # neg_x = model.sample(shape = z_shape, sample_step = model.ebm.sample_step,
-                #                                 device = self.device, replay = model.ebm.replay, apply_noise = True)
-                
-                # d_train_p_neg = model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False,neg_sample = True, **kwargs)
-                # d_train_t = model.new_train_step(x.to(self.device), z_given_x.to(self.device), optimizer=self.optimizer, **kwargs)
-                # else:
-                #     d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
+
+                if model.train_sigma:
+                    # neg_x = model.sample(shape = z_shape, sample_step = model.ebm.sample_step,
+                    #                                 device = self.device, replay = model.ebm.replay)
+                    # #d_train_reg = model.regularization_step(x.to(self.device), optimizer_reg=optimizer_reg, **kwargs)
+                    # #d_train_reg_neg = model.regularization_step(neg_x.to(self.device), optimizer_reg=optimizer_reg, neg_sample = True, **kwargs)
+                    # # neg_x = model.sample(shape = z_shape, sample_step = model.ebm.sample_step,
+                    # #                                 device = self.device, replay = model.ebm.replay, apply_noise = True)
+                    # d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
+                    # d_train_p_neg = model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False,neg_sample = True, **kwargs)
+                    # d_train_t, _ = model.train_step(x.to(self.device), optimizer=self.optimizer, neg_x = neg_x, **kwargs)
+                    # d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, **kwargs)
+                    # d_train_p = model.minimizer_train_step(x.to(self.device), optimizer_min=self.optimizer_pre, **kwargs)
+                    d_train_p = model.new_pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, **kwargs)
+                    # d_train_t = model.train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
+                    #d_train_p = model.new_joint_train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
+                else:
+                    d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
                 # d_train_e = model.train_energy_step(x.to(self.device), optimizer_e=self.optimizer_e, pretrain = False, **kwargs)    
-                # update target network
-                # tau_e = 0.005
-                # for param, target_param_s in zip(model.encoder.parameters(), model.sigma.encoder.parameters()):
-                #     target_param_s.data.copy_(tau_e * param.data + (1 - tau_e) * target_param_s.data)
-                # tau_d = 1.0
+                # # update target network
+                # tau = 1.0
+                # # # # for param, target_param_e, target_param_s in zip(model.encoder.net.parameters(), model.ebm.net.encoder.parameters(), model.sigma.encoder.parameters()):
+                # # # #     target_param_e.data.copy_(tau * param.data + (1 - tau) * target_param_e.data)
+                # # # #     target_param_s.data.copy_(tau * param.data + (1 - tau) * target_param_s.data)
                 # for param, target_param_s in zip(model.decoder.parameters(), model.sigma.decoder.parameters()):
-                #     target_param_s.data.copy_(tau_d * param.data + (1 - tau_d) * target_param_s.data)
+                #     # target_param_e.data.copy_(tau * param.data + (1 - tau) * target_param_e.data)
+                #     target_param_s.data.copy_(tau * param.data + (1 - tau) * target_param_s.data)
 
                 time_meter.update(time.time() - start_ts)
                 if model.train_sigma:
-                    logger.process_iter_train(d_train_t)
+                    logger.process_iter_train(d_train_p)
                 if i_iter % cfg.print_interval == 0:
                     d_train = logger.summary_train(i_iter)
                     print(
@@ -167,8 +167,8 @@ class BaseTrainer:
                     time_meter.reset()
                     logger.add_val(i_iter, d_train)
                     if model.train_sigma:
-                        logger.add_val(i_iter, d_train_t)
-                        # logger.add_val(i_iter, d_train_p)
+                        logger.add_val(i_iter, d_train_p)
+                        logger.add_val(i_iter, d_train_p)
                         # logger.add_val(i_iter, d_train_p_neg)
                         #logger.add_val(i_iter, d_train_reg)
                         #logger.add_val(i_iter, d_train_reg_neg)
@@ -204,6 +204,9 @@ class BaseTrainer:
                     logger.add_val(i_iter, d_val)
                 i_iter += 1
 
+        torch.save(model.encoder.state_dict(), "pretrained/encoder_vae_ho_1.pth")
+        torch.save(model.decoder.state_dict(), "pretrained/decoder_vae_ho_1.pth")
+        torch.save(model.sigma.net.state_dict(), "pretrained/sigma_vae_ho_1.pth")
         self.save_model(model, logdir, i_iter="last")
         return model, best_val_loss
 
@@ -235,30 +238,3 @@ class BaseTrainer:
         for key, val in l_result.items():
             l_result[key] = torch.cat(val)
         return l_result
-
-    def predict_new(self, m, dl, device, flatten=False, pretrain = False):
-        """run prediction for the whole dataset"""
-        l_result = []
-        var = []
-        for x, _ in dl:
-            pred = []
-            for i in range(1):
-                z_given_x = sample_langevin_z_given_x(x.to(device), energy = m.ebm, 
-                                                    sigma = m.sigma, decoder = m.decoder, 
-                                                    encoder = m.encoder, stepsize = m.ebm.conditional_step_size, 
-                                                    n_steps = m.ebm.conditional_sample_step, temperature = m.ebm.temperature, spherical=True)
-                with torch.no_grad():
-                    if flatten:
-                        x = x.view(len(x), -1)
-                    pred.append(-torch.log(m.sigma(z_given_x)).detach().cpu()) # (bs, 1)
-                
-            pred = torch.cat(pred, dim = 1)
-            pred_mean = pred.mean(dim = 1)
-            pred_var = pred.var(dim = 1)
-            l_result.append(pred_mean.detach().cpu())
-            var.append(pred_var.detach().cpu())
-        
-        var = torch.cat(var)
-        mean_var = var.mean()
-        l_result = torch.cat(l_result)
-        return l_result, mean_var
