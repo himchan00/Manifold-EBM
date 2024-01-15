@@ -1,5 +1,5 @@
 import torch
-
+from functools import partial
 def relaxed_distortion_measure(func, z, eta=0.2, create_graph=True):
     '''
     func: decoder that maps "latent value z" to "data", where z.size() == (batch_size, latent_dim)
@@ -148,14 +148,15 @@ def get_pullbacked_Riemannian_metric(func, z, create_graph=True):
     G = torch.einsum('nij,nik->njk', J, J)
     return G
 
-def get_projection_matrix(func, z, create_graph = True):
-    J = jacobian_of_f(func, z, create_graph=create_graph)
+def get_projection_matrix_times_v(func, v, z):
+    J = jacobian_of_f(func, z, create_graph=True)
     pull_back_metric = J.permute(0, 2, 1)@J
     inverse_pull_back_metric = torch.pinverse(pull_back_metric)
     projection_matrix = J @ inverse_pull_back_metric @ J.permute(0, 2, 1)
-    return projection_matrix
+    Tv = (projection_matrix @ v).squeeze(-1) # (bs, x_dim)
+    return Tv
 
-def get_projection_coord_rep(func, z, x, create_graph = True):
+def get_projection_coord_rep(func, z, x, create_graph = True, return_curvature = True):
     J = jacobian_of_f(func, z, create_graph=create_graph)
     J_column_norm_sq = torch.sum(J**2, dim=1)
     pull_back_metric = J.permute(0, 2, 1)@J
@@ -163,4 +164,16 @@ def get_projection_coord_rep(func, z, x, create_graph = True):
     coord_rep = inverse_pull_back_metric @ J.permute(0, 2, 1)
     coord_rep_x = coord_rep @ x.unsqueeze(-1)
     projection_matrix = J @ coord_rep
-    return projection_matrix, coord_rep_x.squeeze(-1), J_column_norm_sq
+    if return_curvature:
+        v = torch.randn(x.size()).to(z).unsqueeze(-1)
+        w = torch.randn(z.size()).to(z).unsqueeze(-1)
+        w_tilda = inverse_pull_back_metric @ w
+        grad_T_w = torch.autograd.functional.jvp(
+            partial(get_projection_matrix_times_v, func, v), z, v=w.squeeze(), create_graph=create_graph)[1]
+        grad_T_w_tilda = torch.autograd.functional.jvp(
+            partial(get_projection_matrix_times_v, func, v), z, v=w_tilda.squeeze(), create_graph=create_graph)[1]
+        extrinsic_curvature = torch.bmm(grad_T_w_tilda.unsqueeze(1), grad_T_w.unsqueeze(2)).squeeze(-1) / 2.0
+
+        return projection_matrix, coord_rep_x.squeeze(-1), J_column_norm_sq, extrinsic_curvature
+    else:
+        return projection_matrix, coord_rep_x.squeeze(-1), J_column_norm_sq

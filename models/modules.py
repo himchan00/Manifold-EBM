@@ -434,6 +434,9 @@ class DeConvNet2(nn.Module):
         self.conv3 = nn.ConvTranspose2d(nh * 8, nh * 8, kernel_size=3, bias=True)
         self.conv4 = nn.ConvTranspose2d(nh * 8, nh * 4, kernel_size=3, bias=True)
         self.conv5 = nn.ConvTranspose2d(nh * 4, out_chan, kernel_size=3, bias=True)
+
+        self.fc1 = nn.Linear(nh * 8 * 12 * 12, 1024)
+        self.fc2 = nn.Linear(1024, in_chan + 1)
         self.in_chan, self.out_chan = in_chan, out_chan
         self.out_activation = get_activation(out_activation) 
 
@@ -455,6 +458,25 @@ class DeConvNet2(nn.Module):
         x = self.conv5(x)
         if self.out_activation is not None:
             x = self.out_activation(x)
+        return x
+
+    def sigma(self, x):
+        if len(x.size()) == 4:
+            pass
+        else:
+            x = x.unsqueeze(2).unsqueeze(2)
+        x = self.conv1(x)
+        x = F.relu(x)
+        x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
+        x = self.conv2(x)
+        x = F.relu(x)
+        x = self.conv3(x) # (bs, 64, 12, 12)
+        x = F.relu(x)
+        x = x.view(x.size(0), -1) # (bs, 64*12*12)
+        x = self.fc1(x)
+        x = F.relu(x)
+        x = self.fc2(x)
+        x = torch.exp(x)
         return x
 
 class DeConvNet3(nn.Module):

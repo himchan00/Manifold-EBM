@@ -34,7 +34,7 @@ def get_net(in_dim, out_dim, **kwargs):
         )
 
     elif kwargs["arch"] == "deconv2":
-        net = DeConvNet3(
+        net = DeConvNet2(
             in_chan=in_dim, out_chan=out_dim, nh=nh, out_activation=out_activation
         )
     if kwargs["arch"] == "fc_vec":

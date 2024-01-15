@@ -11,13 +11,13 @@ model:
     out_activation: 'linear'
     img_size: [1, 28, 28]
     out_chan_num: 1
-  decoder:
-    arch: fc_image
-    l_hidden:  [1024, 1024, 1024, 1024,]
-    activation: ['relu', 'relu', 'relu', 'relu', ]
-    out_activation: 'sigmoid'
-    img_size: [1, 28, 28]
-    out_chan_num: 1
+  # decoder:
+  #   arch: fc_image
+  #   l_hidden:  [1024, 1024, 1024, 1024,]
+  #   activation: ['relu', 'relu', 'relu', 'relu', ]
+  #   out_activation: 'sigmoid'
+  #   img_size: [1, 28, 28]
+  #   out_chan_num: 1
   # encoder: 
   #   arch: conv2fc 
   #   nh: 8
@@ -52,10 +52,8 @@ model:
   max_sigma_sq: 1
   energy_ae:
     sigma_sq: 1e-2
-    harmonic_pretrain: false
-    energy_detach: True
-    harmonic_detach: True
-    conformal_detach: false
+    curvature_reg: 0.1
+    n_eval: 5
     train_sigma: True
   ebm:
     gamma: 0.0

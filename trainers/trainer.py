@@ -226,7 +226,7 @@ class BaseTrainer:
 
     def predict(self, m, dl, device, flatten=False, pretrain = False):
         """run prediction for the whole dataset"""
-        l_result = {"neg_log_prob": [], "recon_error": [], "energy":[], "log_det_jacobian":[]}
+        l_result = {"neg_log_prob": [], "tangential_nll": [], "normal_nll":[], "kl_loss":[]}
         for x, _ in dl:
             with torch.no_grad():
                 if flatten:

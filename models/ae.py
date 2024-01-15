@@ -14,7 +14,6 @@ from geometry import (
     jacobian_of_f,
     relaxed_distortion_measure,
     get_log_det_jacobian_new,
-    get_projection_matrix,
     get_projection_coord_rep,
     conformal_distortion_measure,
 )
@@ -55,18 +54,14 @@ class AE(nn.Module):
 
 class EnergyAE(AE):
     def __init__(
-        self, encoder, decoder, ebm, sigma, sigma_sq=1e-4, harmonic_pretrain = True,
-        energy_detach = True, harmonic_detach = True, 
-        conformal_detach = True, reg = None, train_sigma = True
+        self, encoder, decoder, ebm, sigma, sigma_sq=1e-4, 
+        n_eval = None, curvature_reg = None, train_sigma = True
     ):
         super(EnergyAE, self).__init__(encoder, decoder)
         self.ebm = ebm
         self.sigma_sq = sigma_sq
-        self.harmonic_pretrain = harmonic_pretrain
-        self.energy_detach = energy_detach
-        self.harmonic_detach = harmonic_detach
-        self.conformal_detach = conformal_detach
-        self.reg = reg
+        self.n_eval = n_eval
+        self.curvature_reg = curvature_reg
         self.train_sigma = train_sigma
         self.sigma = sigma
 
@@ -118,7 +113,7 @@ class EnergyAE(AE):
         z_sample = self.sample_latent(z)
         recon = self.decoder(z_sample).view(len(x), -1)
         delta_x = x - recon
-        T, coord, J_sq = get_projection_coord_rep(self.decoder, z_sample, delta_x, create_graph=True)
+        T, coord, J_sq, extrinsic_curvature = get_projection_coord_rep(self.decoder, z_sample, delta_x, create_graph=True)
         sigma_sq = self.decoder.sigma(z_sample)
         half_chan = int(z.shape[1] / 2)
         sigma_tan = sigma_sq[:, :half_chan]
@@ -129,12 +124,17 @@ class EnergyAE(AE):
         D = torch.prod(torch.tensor(x.shape[1:]))
         tangential_nll = (tangential_recon_loss/(2 * (sigma_tan))).sum(dim = 1) + torch.log(sigma_tan).sum(dim = 1)/2
         normal_nll = normal_recon_loss/(2 * (sigma_nor)) + (D - half_chan) * torch.log(sigma_nor)/2
-        conformal_loss = conformal_distortion_measure(self.decoder, z_sample, eta=None, create_graph=True)
+        # conformal_loss = conformal_distortion_measure(self.decoder, z_sample, eta=None, create_graph=True)
         kl_loss = self.kl_loss(z)
-        loss = (tangential_nll + normal_nll + kl_loss + 1e-1 * conformal_loss)/D #  
+        if self.curvature_reg is not None:
+            curvature_loss = self.curvature_reg * extrinsic_curvature
+        else:
+            curvature_loss = 0
+        loss = (tangential_nll + normal_nll + kl_loss + curvature_loss)/D  
         loss = loss.mean()
-
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 0.1)
+        torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), 0.1)
         optimizer_pre.step()
 
         return {
@@ -144,115 +144,81 @@ class EnergyAE(AE):
             "pretrain/kl_loss_": kl_loss.mean(),
             "pretrain/tangential_sigma_sq_": sigma_tan.mean().item(),
             "pretrain/normal_sigma_sq_": sigma_nor.mean().item(),
-            "pretrain/conformal_loss_": conformal_loss.mean().item(),
+            # "pretrain/conformal_loss_": conformal_loss.mean().item(),
+            "pretrain/extrinsic_curvature_": extrinsic_curvature.mean().item(),
             "pretrain/tangential_nll_": tangential_nll.mean().item(),
             "pretrain/normal_nll_": normal_nll.mean().item(),
+            "pretrain/total_recon_error_": (delta_x ** 2).mean().item(),
 
         }
 
-    def pretrain_step(self, x, optimizer_pre, **kwargs):
-        optimizer_pre.zero_grad()
-        z = self.encoder(x)
-        z_sample = self.sample_latent(z)
-        recon = self.decoder(z_sample)
-        sigma_sq = self.decoder.sigma(z_sample) # detach 안해야함을 실험을 통해서 확인
-        sigma_nor = sigma_sq[:, -1]
-        recon_error = ((recon - x) ** 2).view(len(x), -1).mean(dim=1)
-        D = torch.prod(torch.tensor(x.shape[1:]))
-        D_eff = D - self.encoder.out_chan/2
-        nll = recon_error/(2 * (sigma_nor)) + D_eff / D * torch.log(sigma_nor)/2
 
-        kl_loss = self.kl_loss(z)
-        loss = nll + kl_loss/D
-        loss = loss.mean()
+    def neg_log_prob(self, x, pretrain = False):    
+        l_neg_log_prob = []
+        l_tangential_nll = []
+        l_normal_nll = []
+        l_kl_loss = []
+        x_sample = x.detach().clone()
+        for _ in range(self.n_eval):
+            with torch.no_grad():
+                z = self.encoder(x_sample)
+                x = x.view(len(x), -1)
+                z_sample = self.sample_latent(z)
+                recon = self.decoder(z_sample).view(len(x), -1)
+                delta_x = x - recon
+                T, coord, J_sq = get_projection_coord_rep(self.decoder, z_sample, delta_x, create_graph=False, return_curvature=False)
+                sigma_sq = self.decoder.sigma(z_sample)
+                half_chan = int(z.shape[1] / 2)
+                sigma_tan = sigma_sq[:, :half_chan]
+                sigma_nor = sigma_sq[:, -1]
+                projection_error = delta_x - torch.bmm(T, delta_x.unsqueeze(2)).squeeze(2)
+                tangential_recon_loss =  J_sq * (coord ** 2)
+                normal_recon_loss = ((projection_error) ** 2).sum(dim=1)
+                D = torch.prod(torch.tensor(x.shape[1:]))
+                tangential_nll = (tangential_recon_loss/(2 * (sigma_tan))).sum(dim = 1) + torch.log(sigma_tan).sum(dim = 1)/2
+                normal_nll = normal_recon_loss/(2 * (sigma_nor)) + (D - half_chan) * torch.log(sigma_nor)/2
+                # conformal_loss = conformal_distortion_measure(self.decoder, z_sample, eta=None, create_graph=True)
+                kl_loss = self.kl_loss(z)
+                neg_log_prob = (tangential_nll + normal_nll + kl_loss)
+        
+            l_neg_log_prob.append(neg_log_prob)
+            l_tangential_nll.append(tangential_nll)
+            l_normal_nll.append(normal_nll)
+            l_kl_loss.append(kl_loss)
+        
+        neg_log_prob = torch.stack(l_neg_log_prob, dim=1).mean(dim=1)
+        tangential_nll = torch.stack(l_tangential_nll, dim=1).mean(dim=1)
+        normal_nll = torch.stack(l_normal_nll, dim=1).mean(dim=1)
+        kl_loss = torch.stack(l_kl_loss, dim=1).mean(dim=1)
 
-        loss.backward()
-        optimizer_pre.step()
-
-        return {
-            "loss": loss.item(),
-            "pretrain/recon_error_": recon_error.mean().item(),
-            "pretrain/kl_loss_": kl_loss.mean(),
-            "pretrain/sigma_sq_": sigma_nor.mean().item(),
-
-        }
-    
-    def minimizer_train_step(self, x, optimizer_min, **kwargs):
-        optimizer_min.zero_grad()
-        z = self.encode(x)
-        recon = self.decoder(z)
-        sigma_sq = self.sigma(z).view(-1)
-        recon_error = ((recon - x) ** 2).view(len(x), -1).mean(dim=1)
-        log_det_jacobian = get_log_det_jacobian_new(self.decoder, z, create_graph=True)
-        energy = (z**2).sum(dim = 1) / 2
-        D = torch.prod(torch.tensor(x.shape[1:]))
-        loss = (recon_error/(2 * (sigma_sq)) + torch.log(sigma_sq)/2 + (energy + log_det_jacobian)/D).mean()
-        loss.backward()
-        optimizer_min.step()
-        return {
-            "loss": loss.item(),
-            "minimizer/recon_error_": recon_error.mean().item(),
-            "minimizer/energy_": energy.mean().item(),
-            "minimizer/log_det_jacobian_": log_det_jacobian.mean().item(),
-            "minimizer/sigma_sq_": sigma_sq.mean().item(),
-        }
-    
-    def train_step(self, x, optimizer, **kwargs):
-        optimizer.zero_grad()
-        pos_x = x
-        pos_z = self.encode(pos_x).detach().clone()
-        neg_x = self.sample(shape=pos_z.shape, sample_step = self.ebm.sample_step, device=x.device, replay=self.ebm.replay)
-        neg_z = self.encode(neg_x).detach().clone()
-        pos_recon = self.decoder(pos_z)
-        neg_recon = self.decoder(neg_z)
-        pos_sigma_sq = self.sigma(pos_z).view(-1)
-        neg_sigma_sq = self.sigma(neg_z).view(-1)
-        pos_recon_error = ((pos_recon - pos_x) ** 2).view(len(pos_x), -1).mean(dim=1)
-        neg_recon_error = ((neg_recon - neg_x) ** 2).view(len(neg_x), -1).mean(dim=1)
-        pos_log_det_jacobian = get_log_det_jacobian_new(self.decoder, pos_z, create_graph=True)
-        neg_log_det_jacobian = get_log_det_jacobian_new(self.decoder, neg_z, create_graph=True)
-        pos_energy = (pos_z**2).sum(dim = 1) / 2
-        neg_energy = (neg_z**2).sum(dim = 1) / 2
-        D = torch.prod(torch.tensor(x.shape[1:]))
-        total_pos_e = (pos_recon_error/(2 * (pos_sigma_sq)) + torch.log(pos_sigma_sq)/2 + (pos_energy + pos_log_det_jacobian)/D).mean()
-        total_neg_e = (neg_recon_error/(2 * (neg_sigma_sq)) + torch.log(neg_sigma_sq)/2 + (neg_energy + neg_log_det_jacobian)/D).mean()
-        loss = total_pos_e - total_neg_e
-        loss.backward()
-        optimizer.step()
-        return {
-            "loss": loss.item(),
-            "AE/total_pos_e_": total_pos_e.item(),
-            "AE/total_neg_e_": total_neg_e.item(),
-            "AE/pos_recon_error_": pos_recon_error.mean().item(),
-            "AE/neg_recon_error_": neg_recon_error.mean().item(),
-            "AE/pos_log_det_jacobian_": pos_log_det_jacobian.mean().item(),
-            "AE/neg_log_det_jacobian_": neg_log_det_jacobian.mean().item(),
-            "AE/pos_energy_": pos_energy.mean().item(),
-            "AE/neg_energy_": neg_energy.mean().item(),
-            "sigma/pos_sigma_sq_": pos_sigma_sq.mean().item(), "sigma/neg_sigma_sq_": neg_sigma_sq.mean().item(),
-        }
-    
-    
-    def neg_log_prob(self, x, pretrain = False):
-        D = torch.prod(torch.tensor(x.shape[1:]))
-        with torch.no_grad():
-            z = self.encode(x)
-            recon = self.decode(z)
-            # energy = self.ebm.forward_with_x(recon)/self.ebm.temperature
-            if self.train_sigma:
-                # sigma_sq = self.sigma.forward_with_x(recon).view(-1)
-                sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
-            else:
-                sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
-            energy = (z**2).sum(dim = 1) / 2
+        return {"neg_log_prob": neg_log_prob,
+                "tangential_nll": tangential_nll,
+                "normal_nll": normal_nll,
+                "kl_loss": kl_loss}
             
-        # log_det_jacobian = get_log_det_jacobian_new(self.decoder, z.detach(), create_graph=False)
-        log_det_jacobian = torch.zeros_like(energy)
-        recon_error = ((recon - x) ** 2).view(len(x), -1).mean(dim=1)
-        neg_log_prob = recon_error/(2 * (sigma_sq)) + torch.log(sigma_sq)/2 + (energy + log_det_jacobian)/D 
-        return {"neg_log_prob": neg_log_prob, "recon_error": recon_error,
-                "energy": energy, "log_det_jacobian": log_det_jacobian
-               }
+
+
+    
+    # def neg_log_prob(self, x, pretrain = False):
+    #     D = torch.prod(torch.tensor(x.shape[1:]))
+    #     with torch.no_grad():
+    #         z = self.encode(x)
+    #         recon = self.decode(z)
+    #         # energy = self.ebm.forward_with_x(recon)/self.ebm.temperature
+    #         if self.train_sigma:
+    #             # sigma_sq = self.sigma.forward_with_x(recon).view(-1)
+    #             sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
+    #         else:
+    #             sigma_sq = torch.tensor(self.sigma_sq).to(z.device)
+    #         energy = (z**2).sum(dim = 1) / 2
+            
+    #     # log_det_jacobian = get_log_det_jacobian_new(self.decoder, z.detach(), create_graph=False)
+    #     log_det_jacobian = torch.zeros_like(energy)
+    #     recon_error = ((recon - x) ** 2).view(len(x), -1).mean(dim=1)
+    #     neg_log_prob = recon_error/(2 * (sigma_sq)) + torch.log(sigma_sq)/2 + (energy + log_det_jacobian)/D 
+    #     return {"neg_log_prob": neg_log_prob, "recon_error": recon_error,
+    #             "energy": energy, "log_det_jacobian": log_det_jacobian
+    #            }
 
     def visualization_step(self, dl, procedure, **kwargs):
         device = kwargs["device"]
