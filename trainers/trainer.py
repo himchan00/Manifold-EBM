@@ -28,7 +28,7 @@ class BaseTrainer:
         kwargs = {'dataset_size': len(train_loader.dataset)}
         i_iter = 0
         best_val_loss = np.inf
-        # model.encoder.load_state_dict(torch.load("pretrained/encoder_ho_9_z_dim_15.pth"))
+        # model.encoder.load_state_dict(torch.load(f"pretrained/encoder_vae_ho_1_{model.sigma_seq}.pth"))
         # model.decoder.load_state_dict(torch.load("pretrained/decoder_ho_9_z_dim_15.pth"))
         # for i_epoch in range(1, cfg['n_epoch_pre'] + 1):
         #     for x, _ in train_loader:
@@ -84,11 +84,14 @@ class BaseTrainer:
 
         # model.sigma.decoder = copy.deepcopy(model.decoder)
         if not cfg['fix_decoder']:
-            self.optimizer_pre = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
+            self.optimizer_pre = optim.Adam([# {'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
                                             {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
+                                            #{'params': model.log_sigma_sq, 'lr': cfg.optimizer['lr_sigma']},
+                                            #{'params': model.minimizer.parameters(), 'lr':cfg.optimizer['lr_encoder']},
                                             # {'params': model.sigma.parameters(), 'lr': cfg.optimizer['lr_sigma']},
                                             
                             ])
+            self.optimizer_min = optim.Adam([{'params': model.minimizer.parameters(), 'lr':cfg.optimizer['lr_encoder']}])
             
             if model.train_sigma:
                 optimizer = optim.Adam([#{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_energy']},
@@ -117,9 +120,9 @@ class BaseTrainer:
                 #                         ])
                 optimizer = None
 
-        # model.encoder.load_state_dict(torch.load("pretrained/encoder_vae_ho_1.pth"))
-        # model.decoder.load_state_dict(torch.load("pretrained/decoder_vae_ho_1.pth"))
-        # model.sigma.net.load_state_dict(torch.load("pretrained/sigma_vae_ho_1.pth"))
+        # model.encoder.load_state_dict(torch.load(f"pretrained/encoder_vae_ho_1_0.01.pth"))
+        # model.decoder.load_state_dict(torch.load(f"pretrained/decoder_vae_ho_1_0.01.pth"))
+        # model.minimizer.load_state_dict(torch.load(f"pretrained/minimizer_vae_ho_1_0.01.pth"))
 
 
 
@@ -141,24 +144,26 @@ class BaseTrainer:
                     # d_train_t, _ = model.train_step(x.to(self.device), optimizer=self.optimizer, neg_x = neg_x, **kwargs)
                     # d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, **kwargs)
                     # d_train_p = model.minimizer_train_step(x.to(self.device), optimizer_min=self.optimizer_pre, **kwargs)
-                    d_train_p = model.new_pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, **kwargs)
+                    d_train_p = model.minimizer_train_step(x.to(self.device), optimizer_min=self.optimizer_min, **kwargs)
+                    d_train_t = model.new_train_step(x.to(self.device), optimizer=self.optimizer_pre, **kwargs)
+                    
                     # d_train_t = model.train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
                     #d_train_p = model.new_joint_train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
                 else:
-                    d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, pretrain =False, **kwargs)
+                    d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, **kwargs)
                 # d_train_e = model.train_energy_step(x.to(self.device), optimizer_e=self.optimizer_e, pretrain = False, **kwargs)    
                 # # update target network
                 # tau = 1.0
                 # # # # for param, target_param_e, target_param_s in zip(model.encoder.net.parameters(), model.ebm.net.encoder.parameters(), model.sigma.encoder.parameters()):
                 # # # #     target_param_e.data.copy_(tau * param.data + (1 - tau) * target_param_e.data)
                 # # # #     target_param_s.data.copy_(tau * param.data + (1 - tau) * target_param_s.data)
+                model.decoder_target = copy.deepcopy(model.decoder)
                 # for param, target_param_s in zip(model.decoder.parameters(), model.sigma.decoder.parameters()):
                 #     # target_param_e.data.copy_(tau * param.data + (1 - tau) * target_param_e.data)
                 #     target_param_s.data.copy_(tau * param.data + (1 - tau) * target_param_s.data)
 
                 time_meter.update(time.time() - start_ts)
-                if model.train_sigma:
-                    logger.process_iter_train(d_train_p)
+                logger.process_iter_train(d_train_t)
                 if i_iter % cfg.print_interval == 0:
                     d_train = logger.summary_train(i_iter)
                     print(
@@ -167,7 +172,7 @@ class BaseTrainer:
                     time_meter.reset()
                     logger.add_val(i_iter, d_train)
                     if model.train_sigma:
-                        logger.add_val(i_iter, d_train_p)
+                        logger.add_val(i_iter, d_train_t)
                         logger.add_val(i_iter, d_train_p)
                         # logger.add_val(i_iter, d_train_p_neg)
                         #logger.add_val(i_iter, d_train_reg)
@@ -204,9 +209,9 @@ class BaseTrainer:
                     logger.add_val(i_iter, d_val)
                 i_iter += 1
 
-        torch.save(model.encoder.state_dict(), "pretrained/encoder_vae_ho_1.pth")
-        torch.save(model.decoder.state_dict(), "pretrained/decoder_vae_ho_1.pth")
-        torch.save(model.sigma.net.state_dict(), "pretrained/sigma_vae_ho_1.pth")
+        # torch.save(model.encoder.state_dict(), f"pretrained/encoder_vae_ho_1_{model.sigma_sq}.pth")
+        # torch.save(model.decoder.state_dict(), f"pretrained/decoder_vae_ho_1_{model.sigma_sq}.pth")
+        # torch.save(model.minimizer.state_dict(), f"pretrained/minimizer_vae_ho_1_{model.sigma_sq}.pth")
         self.save_model(model, logdir, i_iter="last")
         return model, best_val_loss
 
@@ -226,7 +231,7 @@ class BaseTrainer:
 
     def predict(self, m, dl, device, flatten=False, pretrain = False):
         """run prediction for the whole dataset"""
-        l_result = {"neg_log_prob": [], "tangential_nll": [], "normal_nll":[], "kl_loss":[]}
+        l_result = {"neg_log_prob": [], "recon_error": [], "kl_loss":[]}
         for x, _ in dl:
             with torch.no_grad():
                 if flatten:

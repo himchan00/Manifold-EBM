@@ -99,7 +99,8 @@ def get_ae(**model_cfg):
         model = IRVAE(encoder, IsotropicGaussian(decoder), iso_reg=iso_reg, metric=metric)
     elif arch == "eae":
         from models.modules import normalized_net, energy_net, sigma_net, new_sigma_net, FC_for_decoder_and_sigma
-        encoder = get_net(in_dim=x_dim, out_dim=z_dim*2, **model_cfg["encoder"])
+        encoder = get_net(in_dim=x_dim, out_dim=z_dim * 2, **model_cfg["encoder"])
+        minimizer = get_net(in_dim=x_dim, out_dim=z_dim, **model_cfg["encoder"])
         # decoder = get_net(in_dim=z_dim, out_dim=x_dim, **model_cfg["decoder"])
         decoder = FC_for_decoder_and_sigma(z_dim=z_dim, x_dim=x_dim)
         # sigma = sigma_net(get_net(in_dim=x_dim, out_dim=z_dim + 1, **model_cfg["sigma"]), decoder, min_sigma_sq, max_sigma_sq)
@@ -108,7 +109,7 @@ def get_ae(**model_cfg):
         from models.energy_based import EnergyBasedModel
         # ebm = EnergyBasedModel(energy, **model_cfg["ebm"])
         ebm = None
-        model = EnergyAE(encoder, decoder, ebm, sigma, **model_cfg["energy_ae"])
+        model = EnergyAE(encoder, decoder, ebm, sigma, minimizer, **model_cfg["energy_ae"])
     return model
 
 def get_model(cfg, *args, version=None, **kwargs):
