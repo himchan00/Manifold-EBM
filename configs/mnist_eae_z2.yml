@@ -51,8 +51,8 @@ model:
   min_sigma_sq: 1e-5
   max_sigma_sq: 1
   energy_ae:
-    sigma_sq: 1e-3
-    curvature_reg: 0.1
+    sigma_sq: 1e-4
+    curvature_reg: 1.0
     n_eval: 10
     train_sigma: True
   ebm:

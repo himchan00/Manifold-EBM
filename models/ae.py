@@ -164,7 +164,7 @@ class EnergyAE(AE):
         covariance = torch.linalg.pinv(precision, hermitian=True)
         mean = (covariance @ ((G/sigma_sq) @ z.unsqueeze(2) + (J.permute(0, 2, 1)/sigma_sq) @ proj_error.unsqueeze(2))).squeeze(2)
         posterior = torch.distributions.MultivariateNormal(mean, precision_matrix=precision)
-        z_sample = posterior.rsample()
+        z_sample = posterior.rsample().detach().clone()
         recon = self.decoder(z_sample)
         D = torch.prod(torch.tensor(x.shape[1:]))
         recon_error = ((recon - x) ** 2).view(len(x), -1).sum(dim=1)
@@ -175,7 +175,7 @@ class EnergyAE(AE):
             curvature_loss = self.curvature_reg * extrinsic_curvature
         else:
             curvature_loss = 0
-        loss  = (recon_error/(2 * sigma_sq) + D * self.log_sigma_sq/2 + kl_loss + curvature_loss + 0.001*conformal_loss)/D # 
+        loss  = (recon_error/(2 * sigma_sq) + D * self.log_sigma_sq/2 + kl_loss + curvature_loss + 0.01*conformal_loss)/D # 
         loss = loss.mean()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 0.1)
@@ -328,11 +328,24 @@ class EnergyAE(AE):
         z = self.encoder(x.to(device))
         z = self.sample_latent(z)
         z_star = self.minimizer(x.to(device))
+        # posterior
+        J = jacobian_of_f(self.decoder, z_star, create_graph=False)
+        G = J.permute(0, 2, 1)@J
+        proj_error = (x.to(device) - self.decoder(z_star)).view(len(x), -1)
+        sigma_sq = torch.exp(self.log_sigma_sq)
+        precision = G/sigma_sq + torch.eye(G.shape[1]).to(G)
+        covariance = torch.linalg.pinv(precision, hermitian=True)
+        mean = (covariance @ ((G/sigma_sq) @ z_star.unsqueeze(2) + (J.permute(0, 2, 1)/sigma_sq) @ proj_error.unsqueeze(2))).squeeze(2)
+        posterior = torch.distributions.MultivariateNormal(mean, precision_matrix=precision)
+        z_sample = posterior.rsample().detach().clone()
+
         recon = self.decode(z)
         recon_star = self.decode(z_star)
+        recon_posterior = self.decode(z_sample)
         x_img = make_grid(x.detach().cpu(), nrow=num_each_axis, value_range=(0, 1), pad_value=1)
         recon_img = make_grid(recon.detach().cpu(), nrow=num_each_axis, value_range=(0, 1), pad_value=1)
         recon_star_img = make_grid(recon_star.detach().cpu(), nrow=num_each_axis, value_range=(0, 1), pad_value=1)
+        recon_posterior_img = make_grid(recon_posterior.detach().cpu(), nrow=num_each_axis, value_range=(0, 1), pad_value=1)
         if procedure == 'train_energy' or procedure == "train":
             sampled_x = self.sample(shape = z.shape,  device=device, apply_noise=False)
             sampled_img = make_grid(sampled_x.detach().cpu(), nrow=num_each_axis, value_range=(0, 1), pad_value=1)
@@ -427,6 +440,7 @@ class EnergyAE(AE):
                     'input@': torch.clip(x_img, min=0, max=1),
                     'recon@': torch.clip(recon_img, min=0, max=1),
                     'recon_star@': torch.clip(recon_star_img, min=0, max=1),
+                    'recon_posterior@': torch.clip(recon_posterior_img, min=0, max=1),
                     'sampled@': torch.clip(sampled_img, min=0, max=1),
                 }
             else:
