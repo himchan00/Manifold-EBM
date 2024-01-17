@@ -175,7 +175,7 @@ class EnergyAE(AE):
             curvature_loss = self.curvature_reg * extrinsic_curvature
         else:
             curvature_loss = 0
-        loss  = (recon_error/(2 * sigma_sq) + D * self.log_sigma_sq/2 + kl_loss + curvature_loss + 0.01*conformal_loss)/D # 
+        loss  = (recon_error/(2 * sigma_sq) + D * self.log_sigma_sq/2 + kl_loss + curvature_loss +0.01*conformal_loss)/D # + 
         loss = loss.mean()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 0.1)

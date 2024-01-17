@@ -86,7 +86,7 @@ class BaseTrainer:
         if not cfg['fix_decoder']:
             self.optimizer_pre = optim.Adam([# {'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
                                             {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
-                                            #{'params': model.log_sigma_sq, 'lr': cfg.optimizer['lr_sigma']},
+                                            {'params': model.log_sigma_sq, 'lr': cfg.optimizer['lr_sigma']},
                                             #{'params': model.minimizer.parameters(), 'lr':cfg.optimizer['lr_encoder']},
                                             # {'params': model.sigma.parameters(), 'lr': cfg.optimizer['lr_sigma']},
                                             
