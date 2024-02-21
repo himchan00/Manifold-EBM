@@ -41,15 +41,13 @@ model:
   #   out_chan_num: 1
   sigma:
     arch: fc_vec
-    l_hidden: [1024, 1024, 1024, 1024,] # [256, 256, 256, 256, 256]
-    activation: ['relu', 'relu', 'relu', 'relu']
+    l_hidden: [1024] # [256, 256, 256, 256, 256]
+    activation: ['relu']
     out_activation: 'linear'
-    img_size: [1, 28, 28]
-    out_chan_num: 1
   x_dim: 784
   z_dim: 16
-  min_sigma_sq: 1e-5
-  max_sigma_sq: 1
+  min_sigma_sq: 1e-3
+  max_sigma_sq: 10
   energy_ae:
     sigma_sq: 1e-1
     curvature_reg: 1.0
@@ -118,7 +116,7 @@ training:
   optimizer:
     lr_encoder: 1e-4
     lr_encoder_pre: 1e-4
-    lr_decoder: 3e-5
+    lr_decoder: 1e-4
     lr_energy: 1e-3
     lr_sigma: 1e-4
   print_interval: 200

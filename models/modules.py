@@ -83,6 +83,7 @@ class FC_image(nn.Module):
             prev_dim = n_hidden
 
         self.net = nn.Sequential(*l_layer)
+        self.feature_net = nn.Sequential(*l_layer[:-1])
 
     def forward(self, x):
         if len(x.size()) == 4:
@@ -94,6 +95,12 @@ class FC_image(nn.Module):
             out = out.reshape(-1, self.out_chan_num, dim, dim)
         return out
 
+    def get_feature(self, x):
+        if len(x.size()) == 4:
+            x = x.view(-1, self.in_chan)
+        x = self.feature_net(x)
+        return x
+
 class FC_for_decoder_and_sigma(nn.Module):
     def __init__(self, z_dim, x_dim):
         super().__init__()
@@ -104,10 +111,6 @@ class FC_for_decoder_and_sigma(nn.Module):
         self.fc4_d = nn.Linear(1024, 1024)
         self.fc5_d = nn.Linear(1024, 1024)
         self.fc6_d = nn.Linear(1024, x_dim)
-
-        self.fc4_s = nn.Linear(1024, 1024)
-        self.fc5_s = nn.Linear(1024, 1024)
-        self.fc6_s = nn.Linear(1024, z_dim + 1)
 
     def forward(self, z):
         x = self.fc1(z)
@@ -126,8 +129,45 @@ class FC_for_decoder_and_sigma(nn.Module):
         dim = int(np.sqrt(x_d.shape[1]))
         x_d = x_d.reshape(-1, 1, dim, dim)
         return x_d
+
+class FC_for_encoder_and_sigma(nn.Module):
+    def __init__(self, z_dim, x_dim):
+        super().__init__()
+        self.fc1 = nn.Linear(x_dim, 1024)
+        self.fc2 = nn.Linear(1024, 1024)
+        self.fc3 = nn.Linear(1024, 1024)
+
+        self.fc4_e = nn.Linear(1024, 1024)
+        self.fc5_e = nn.Linear(1024, 1024)
+        self.fc6_e = nn.Linear(1024, z_dim)
+
+        self.fc4_s = nn.Linear(1024, 1024)
+        self.fc5_s = nn.Linear(1024, 1024)
+        self.fc6_s = nn.Linear(1024, 1)
+
+        # self.sig_min = 1e-3
+        # self.sig_max = 10
+    def forward(self, z):
+        if len(z.size()) == 4:
+            z = z.view(z.size(0), -1)
+        x = self.fc1(z)
+        x = F.relu(x)
+        x = self.fc2(x)
+        x = F.relu(x)
+        x = self.fc3(x)
+        x = F.relu(x)
+
+        x_e = self.fc4_e(x)
+        x_e = F.relu(x_e)
+        x_e = self.fc5_e(x_e)
+        x_e = F.relu(x_e)
+        x_e = self.fc6_e(x_e)
+    
+        return x_e
     
     def sigma(self, z):
+        if len(z.size()) == 4:
+            z = z.view(z.size(0), -1)
         x = self.fc1(z)
         x = F.relu(x)
         x = self.fc2(x)
@@ -140,6 +180,8 @@ class FC_for_decoder_and_sigma(nn.Module):
         x_s = self.fc5_s(x_s)
         x_s = F.relu(x_s)
         x_s = self.fc6_s(x_s)
+        # x_s = torch.sigmoid(x_s)
+        # x_s = torch.exp(torch.log(self.sig_min) + (torch.log(self.sig_max) - torch.log(self.sig_min)) * x_s)
         x_s = torch.exp(x_s)
         return x_s
 
@@ -324,24 +366,33 @@ class energy_net(nn.Module):
         return x
 
 class sigma_net(nn.Module):
-    def __init__(self, net, decoder, min_sigma_sq = 1e-4, max_sigma_sq = 1e-2):
+    def __init__(self, net, minimizer_target, decoder_target, min_sigma_sq = 1e-4, max_sigma_sq = 1e-2):
         super().__init__()
+        # self.net = nn.Linear(1024, 1)
         self.net = net
-        self.decoder = decoder
+        self.decoder_target = decoder_target
+        self.minimizer_target = minimizer_target
         self.min = torch.log(torch.tensor(min_sigma_sq))
         self.max = torch.log(torch.tensor(max_sigma_sq))
         self.min.requires_grad = False
         self.max.requires_grad = False
 
     def forward(self, z):
-        x = self.decoder.get_feature(z)
+        x = self.decoder_target(z)
+        x = x.view(x.size(0), -1)
+        x = self.minimizer_target.get_feature(x)
         x = self.net(x)
-        x = torch.exp(x)
+        x = torch.sigmoid(x)
+        x = torch.exp(self.min + (self.max - self.min) * x)
         return x
 
     def forward_with_x(self, x):
+        if len(x.size()) == 4:
+            x = x.view(x.size(0), -1)
+        x = self.minimizer_target.get_feature(x)
         x = self.net(x)
-        x = torch.exp(x)
+        x = torch.sigmoid(x)
+        x = torch.exp(self.min + (self.max - self.min) * x)
         return x
 
 class new_sigma_net(nn.Module):
