@@ -7,7 +7,8 @@ def get_dataloader(data_dict, **kwargs):
     loader = data.DataLoader(
         dataset,
         batch_size=data_dict["batch_size"],
-        shuffle=data_dict.get("shuffle", True)
+        shuffle=data_dict.get("shuffle", True),
+        drop_last = True,
     )
     return loader
 

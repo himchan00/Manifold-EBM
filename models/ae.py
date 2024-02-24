@@ -20,6 +20,28 @@ from geometry import (
     curvature_reg,
 )
 
+def jacobian(output, input_tensor):
+    """
+    Calculate the Jacobian matrix.
+
+    Args:
+        output (torch.Tensor): Output tensor of shape (bs, n).
+        input_tensor (torch.Tensor): Input tensor of shape (bs, m).
+
+    Returns:
+        torch.Tensor: Jacobian matrix of shape (bs, n, m).
+    """
+    bs, n = output.shape
+    _, m = input_tensor.shape
+    jac = torch.zeros(bs, n, m).to(output)
+
+    for i in range(n):
+        grad_output_i = torch.zeros_like(output)
+        grad_output_i[:, i] = 1.0
+        jac[:, i, :] = torch.autograd.grad(output, input_tensor, grad_outputs=grad_output_i, retain_graph=True)[0]
+
+    return jac
+
 class AE(nn.Module):
     def __init__(self, encoder, decoder):
         super(AE, self).__init__()
@@ -95,13 +117,20 @@ class EnergyAE(AE):
         x_star = self.decoder(z_star).view(len(x), -1) # (B, D)
         J = jacobian_of_f(self.decoder, z_star, create_graph=True) # (B, D, n)
         x_star_target = self.decoder_target(z_star).view(len(x), -1) # (B, D)
-        sigma = self.minimizer.sigma(x_star_target).squeeze() # (B,)
+        sigma = self.minimizer.sigma(x_star_target).squeeze() # (B,)  
         # sigma = torch.exp(self.log_sigma_sq)
-        G = J.permute(0, 2, 1)@J # (B, n, n)
-        
+        # G = J.permute(0, 2, 1)@J # (B, n, n)
+
+        #second order term
+        g = ((x_star - x).unsqueeze(1) @ J).squeeze() # (B, n)
+        H = jacobian(g, z_star) # (B, n, n)
+        H = (H + H.permute(0, 2, 1)) / 2
+
         recon_loss = (x - x_star).pow(2).sum(dim=1) / (2 * (sigma ** 2)) # (B, )
         
-        log_det_loss = torch.logdet(G/((sigma ** 2).unsqueeze(1).unsqueeze(2)) + torch.eye(n).to(z_star)) / 2 # (B, )
+        log_det_loss = torch.logdet((H)/((sigma ** 2).unsqueeze(1).unsqueeze(2)) + torch.eye(n).to(z_star)) / 2 # (B, )
+        log_det_loss[torch.isnan(log_det_loss)] = 0
+        log_det_loss[torch.isinf(log_det_loss)] = 0
 
         energy_loss = (z_star ** 2).sum(dim=1) / 2 # (B, )
 
@@ -133,6 +162,9 @@ class EnergyAE(AE):
         optimizer.zero_grad()
         z_star = self.minimizer(x).detach()
         z_neg = self.minimizer(neg_x).detach()
+        z_star.requires_grad = True
+        z_neg.requires_grad = True
+
         x = x.view(len(x), -1)
         neg_x = neg_x.view(len(neg_x), -1)
 
@@ -143,29 +175,42 @@ class EnergyAE(AE):
         x_neg_star = self.decoder(z_neg).view(len(neg_x), -1)
         J = jacobian_of_f(self.decoder, z_star, create_graph=True)
         J_neg = jacobian_of_f(self.decoder, z_neg, create_graph=True)
-        sigma = self.sigma(z_star).squeeze()
-        sigma_neg = self.sigma(z_neg).squeeze()
-        G = J.permute(0, 2, 1)@J
-        G_neg = J_neg.permute(0, 2, 1)@J_neg
+        x_star_target = self.decoder_target(z_star).view(len(x), -1)
+        x_neg_star_target = self.decoder_target(z_neg).view(len(neg_x), -1)
+        sigma = self.minimizer.sigma(x_star_target).squeeze() # (B,)
+        sigma_neg = self.minimizer.sigma(x_neg_star_target).squeeze() # (B,)
+        
+        g = ((x_star - x).unsqueeze(1) @ J).squeeze()
+        g_neg = ((x_neg_star - neg_x).unsqueeze(1) @ J_neg).squeeze()
+
+        H = jacobian(g, z_star)
+        H_neg = jacobian(g_neg, z_neg)
+        H = (H + H.permute(0, 2, 1)) / 2
+        H_neg = (H_neg + H_neg.permute(0, 2, 1)) / 2
 
         recon_loss = (x - x_star).pow(2).sum(dim=1) / (2 * (sigma ** 2))
         recon_loss_neg = (neg_x - x_neg_star).pow(2).sum(dim=1) / (2 * (sigma_neg ** 2))
-        log_det_loss = torch.logdet(G/((sigma ** 2).unsqueeze(1).unsqueeze(2)) + torch.eye(n).to(z_star)) / 2
-        log_det_loss_neg = torch.logdet(G_neg/((sigma_neg ** 2).unsqueeze(1).unsqueeze(2)) + torch.eye(n).to(z_star)) / 2
+        log_det_loss = torch.logdet(H/((sigma ** 2).unsqueeze(1).unsqueeze(2)) + torch.eye(n).to(z_star)) / 2
+        log_det_loss_neg = torch.logdet(H_neg/((sigma_neg ** 2).unsqueeze(1).unsqueeze(2)) + torch.eye(n).to(z_star)) / 2
+        log_det_loss[torch.isnan(log_det_loss)] = 0
+        log_det_loss[torch.isinf(log_det_loss)] = 0
+        log_det_loss_neg[torch.isnan(log_det_loss_neg)] = 0
+        log_det_loss_neg[torch.isinf(log_det_loss_neg)] = 0
         #energy_loss = (z_star ** 2).sum(dim=1) / 2
         #energy_loss_neg = (z_neg ** 2).sum(dim=1) / 2
         sigma_loss = D * torch.log(sigma)
         sigma_loss_neg = D * torch.log(sigma_neg)
 
-        pos_e = (recon_loss + log_det_loss +  sigma_loss)/D # + self.constant_term
-        neg_e = (recon_loss_neg + log_det_loss_neg + sigma_loss_neg )/D # + self.constant_term
+        pos_e = (recon_loss + log_det_loss +  sigma_loss)/D + self.constant_term
+        neg_e = (recon_loss_neg + log_det_loss_neg + sigma_loss_neg )/D + self.constant_term
 
         loss  = pos_e.mean() - neg_e.mean()
-        # reg_loss =  neg_e.pow(2).mean() # + pos_e.pow(2).mean()
-        # loss += 1 * reg_loss
+        # reg_loss =  neg_e.pow(2).mean() + pos_e.pow(2).mean()
+        # loss += 0.1 * reg_loss
         loss.backward()
 
         torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), 0.1)
+        torch.nn.utils.clip_grad_norm_(self.minimizer.parameters(), 0.1)
 
         optimizer.step()
         return {"loss": loss.item(),
@@ -183,28 +228,36 @@ class EnergyAE(AE):
 
     
     def neg_log_prob(self, x, pretrain = False):    
-        with torch.no_grad():
-            z_star = self.minimizer(x) # (B, n)
-            x = x.view(len(x), -1) # (B, D)
+        # with torch.no_grad():
+        z_star = self.minimizer(x) # (B, n)
+        x = x.view(len(x), -1) # (B, D)
 
-            D = x.shape[1]
-            n = z_star.shape[1]
+        D = x.shape[1]
+        n = z_star.shape[1]
 
-            x_star = self.decoder(z_star).view(len(x), -1) # (B, D)
-            J = jacobian_of_f(self.decoder, z_star, create_graph=True) # (B, D, n)
-            sigma = self.minimizer.sigma(x_star).squeeze() # (B,)
-            # sigma = torch.exp(self.log_sigma_sq)
-            G = J.permute(0, 2, 1)@J # (B, n, n)
-            
-            recon_loss = (x - x_star).pow(2).sum(dim=1) / (2 * (sigma ** 2)) # (B, )
-            
-            log_det_loss = torch.logdet(G/((sigma ** 2).unsqueeze(1).unsqueeze(2)) + torch.eye(n).to(z_star)) / 2 # (B, )
+        x_star = self.decoder(z_star).view(len(x), -1) # (B, D)
+        J = jacobian_of_f(self.decoder, z_star, create_graph=True) # (B, D, n)
+        x_star_target = self.decoder_target(z_star).view(len(x), -1) # (B, D)
+        sigma = self.minimizer.sigma(x_star_target).squeeze() # (B,)
+        # sigma = torch.exp(self.log_sigma_sq)
+        # G = J.permute(0, 2, 1)@J # (B, n, n)
+        
+        #second order term
+        g = ((x_star - x).unsqueeze(1) @ J).squeeze() # (B, n)
+        H = jacobian(g, z_star) # (B, n, n)
+        H = (H + H.permute(0, 2, 1)) / 2
+        
+        recon_loss = (x - x_star).pow(2).sum(dim=1) / (2 * (sigma ** 2)) # (B, )
+        
+        log_det_loss = torch.logdet((H)/((sigma ** 2).unsqueeze(1).unsqueeze(2)) + torch.eye(n).to(z_star)) / 2 # (B, )
+        log_det_loss[torch.isnan(log_det_loss)] = 0
+        log_det_loss[torch.isinf(log_det_loss)] = 0
 
-            energy_loss = (z_star ** 2).sum(dim=1) / 2 # (B, )
+        energy_loss = (z_star ** 2).sum(dim=1) / 2 # (B, )
 
-            sigma_loss = D * torch.log(sigma) # (B, )
+        sigma_loss = D * torch.log(sigma) # (B, )
 
-            neg_log_prob  = (recon_loss + log_det_loss + energy_loss + sigma_loss)
+        neg_log_prob  = (recon_loss + log_det_loss + energy_loss + sigma_loss)
         return {"neg_log_prob": neg_log_prob,
                 "recon_loss": recon_loss,
                 'log_det_loss': log_det_loss,
