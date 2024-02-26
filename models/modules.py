@@ -126,7 +126,7 @@ class FC_for_decoder_and_sigma(nn.Module):
         x_d = F.relu(x_d)
         x_d = self.fc6_d(x_d)
         x_d = torch.sigmoid(x_d)
-        dim = int(np.sqrt(x_d.shape[1]))
+        dim = int(np.sqrt(x_d.shape[-1]))
         x_d = x_d.reshape(-1, 1, dim, dim)
         return x_d
 

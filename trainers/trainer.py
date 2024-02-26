@@ -103,13 +103,13 @@ class BaseTrainer:
                                             {'params': model.minimizer.parameters(), 'lr':cfg.optimizer['lr_encoder_pre']},
                                             
                             ])
-            self.optimizer_min = optim.Adam([{'params': min_param, 'lr':cfg.optimizer['lr_encoder_pre']}])
+            self.optimizer_min = optim.Adam([{'params': model.minimizer.parameters(), 'lr':cfg.optimizer['lr_encoder_pre']}])
             
             if model.train_sigma:
                 optimizer = optim.Adam([#{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_energy']},
                                         {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
                                         {'params': model.constant_term, 'lr':cfg.optimizer['lr_energy']},
-                                        {'params': sigma_param, 'lr':cfg.optimizer['lr_sigma']},
+                                        # {'params': sigma_param, 'lr':cfg.optimizer['lr_sigma']},
                                         ])
             else:
                 optimizer = optim.Adam([#{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
@@ -146,11 +146,11 @@ class BaseTrainer:
                 start_ts = time.time()
 
                 if model.train_sigma:
-                    neg_x = model.sample(shape = (x.shape[0], 16), device=self.device)
-                    d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_min, **kwargs)
-                    d_train_p_neg = model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_min, is_neg = True, **kwargs)
-                    # d_train_t = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, **kwargs)
-                    d_train_t = model.train_step(x.to(self.device), neg_x.to(self.device), optimizer=optimizer, **kwargs)
+                    # neg_x = model.sample(shape = (x.shape[0], 16), device=self.device)
+                    # d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_min, **kwargs)
+                    # d_train_p_neg = model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_min, is_neg = True, **kwargs)
+                    d_train_t = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, **kwargs)
+                    # d_train_t = model.train_step(x.to(self.device), neg_x.to(self.device), optimizer=optimizer, **kwargs)
                     
 
                 else:
@@ -168,8 +168,8 @@ class BaseTrainer:
                     logger.add_val(i_iter, d_train)
                     if model.train_sigma:
                         logger.add_val(i_iter, d_train_t)
-                        logger.add_val(i_iter, d_train_p)
-                        logger.add_val(i_iter, d_train_p_neg)
+                        # logger.add_val(i_iter, d_train_p)
+                        # logger.add_val(i_iter, d_train_p_neg)
                         #logger.add_val(i_iter, d_train_reg)
                         #logger.add_val(i_iter, d_train_reg_neg)
                     else:

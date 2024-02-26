@@ -5,6 +5,7 @@ import copy
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from matplotlib import cm
+from functorch import hessian, vmap
 from torchvision.utils import make_grid
 from utils.utils import label_to_color, figure_to_array, PD_metric_to_ellipse
 from geometry import (
@@ -100,40 +101,53 @@ class EnergyAE(AE):
         with torch.no_grad():
             x = self.decode(z)
             if apply_noise:
-                    sigma = self.minimizer.sigma(x)
-                    # sigma = torch.exp(self.log_sigma_sq)
-                    x = x + torch.randn_like(x) * sigma.unsqueeze(1).unsqueeze(2)
+                    # sigma = self.minimizer.sigma(x)
+                    sigma = torch.exp(self.log_sigma_sq)
+                    x = x + torch.randn_like(x) * sigma # .unsqueeze(1).unsqueeze(2)
         
         return x
 
     def pretrain_step(self, x, optimizer_pre, is_neg = False, **kwargs):
+
+        def recon_loss_func(decoder, x, z, sigma):
+            """
+            decoder : decoder network
+            x : input data (D)
+            z : latent variable (n)
+            sigma : noise level (1)
+
+            return : reconstruction loss ()
+            """
+            x_star = decoder(z).view(-1) # (D)
+            recon_loss = (x - x_star).pow(2).sum() / (2 * (sigma ** 2)) 
+            return recon_loss.squeeze()
+        
         optimizer_pre.zero_grad()
         z_star = self.minimizer(x) # (B, n)
+        z_star_detached = z_star.detach()
+        z_star_detached.requires_grad = True
         x = x.view(len(x), -1) # (B, D)
-
+        sigma = torch.exp(self.log_sigma_sq)
+        
         D = x.shape[1]
         n = z_star.shape[1]
 
+        # compute recon loss
         x_star = self.decoder(z_star).view(len(x), -1) # (B, D)
-        J = jacobian_of_f(self.decoder, z_star, create_graph=True) # (B, D, n)
-        x_star_target = self.decoder_target(z_star).view(len(x), -1) # (B, D)
-        sigma = self.minimizer.sigma(x_star_target).squeeze() # (B,)  
-        # sigma = torch.exp(self.log_sigma_sq)
-        # G = J.permute(0, 2, 1)@J # (B, n, n)
-
-        #second order term
-        g = ((x_star - x).unsqueeze(1) @ J).squeeze() # (B, n)
-        H = jacobian(g, z_star) # (B, n, n)
-        H = (H + H.permute(0, 2, 1)) / 2
-
         recon_loss = (x - x_star).pow(2).sum(dim=1) / (2 * (sigma ** 2)) # (B, )
+
+        # compute energy loss
+        energy_loss = (z_star ** 2).sum(dim=1) / 2 # (B, )
+
+        # compute log det loss
+        compute_batch_hessian = vmap(hessian(recon_loss_func, argnums = 2), in_dims = (None, 0, 0, None))
+        batch_hess = compute_batch_hessian(self.decoder, x, z_star_detached, torch.exp(self.log_sigma_sq))
         
-        log_det_loss = torch.logdet((H)/((sigma ** 2).unsqueeze(1).unsqueeze(2)) + torch.eye(n).to(z_star)) / 2 # (B, )
+        log_det_loss = torch.logdet((batch_hess) + torch.eye(n).to(z_star)) / 2 # (B, )
         log_det_loss[torch.isnan(log_det_loss)] = 0
         log_det_loss[torch.isinf(log_det_loss)] = 0
 
-        energy_loss = (z_star ** 2).sum(dim=1) / 2 # (B, )
-
+        # compute sigma loss
         sigma_loss = D * torch.log(sigma) # (B, )
 
         loss  = (recon_loss + log_det_loss + energy_loss + sigma_loss)/D
@@ -205,8 +219,8 @@ class EnergyAE(AE):
         neg_e = (recon_loss_neg + log_det_loss_neg + sigma_loss_neg )/D + self.constant_term
 
         loss  = pos_e.mean() - neg_e.mean()
-        # reg_loss =  neg_e.pow(2).mean() + pos_e.pow(2).mean()
-        # loss += 0.1 * reg_loss
+        reg_loss =  neg_e.pow(2).mean() + pos_e.pow(2).mean()
+        loss += 0.1 * reg_loss
         loss.backward()
 
         torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), 0.1)
@@ -228,33 +242,44 @@ class EnergyAE(AE):
 
     
     def neg_log_prob(self, x, pretrain = False):    
-        # with torch.no_grad():
-        z_star = self.minimizer(x) # (B, n)
-        x = x.view(len(x), -1) # (B, D)
+        def recon_loss_func(decoder, x, z, sigma):
+            """
+            decoder : decoder network
+            x : input data (D)
+            z : latent variable (n)
+            sigma : noise level (1)
 
+            return : reconstruction loss ()
+            """
+            x_star = decoder(z).view(-1) # (D)
+            recon_loss = (x - x_star).pow(2).sum() / (2 * (sigma ** 2)) 
+            return recon_loss.squeeze()
+        
+        z_star = self.minimizer(x) # (B, n)
+        # z_star_detached = z_star.detach()
+        # z_star_detached.requires_grad = True
+        x = x.view(len(x), -1) # (B, D)
+        sigma = torch.exp(self.log_sigma_sq)
+        
         D = x.shape[1]
         n = z_star.shape[1]
 
+        # compute recon loss
         x_star = self.decoder(z_star).view(len(x), -1) # (B, D)
-        J = jacobian_of_f(self.decoder, z_star, create_graph=True) # (B, D, n)
-        x_star_target = self.decoder_target(z_star).view(len(x), -1) # (B, D)
-        sigma = self.minimizer.sigma(x_star_target).squeeze() # (B,)
-        # sigma = torch.exp(self.log_sigma_sq)
-        # G = J.permute(0, 2, 1)@J # (B, n, n)
-        
-        #second order term
-        g = ((x_star - x).unsqueeze(1) @ J).squeeze() # (B, n)
-        H = jacobian(g, z_star) # (B, n, n)
-        H = (H + H.permute(0, 2, 1)) / 2
-        
         recon_loss = (x - x_star).pow(2).sum(dim=1) / (2 * (sigma ** 2)) # (B, )
+
+        # compute energy loss
+        energy_loss = (z_star ** 2).sum(dim=1) / 2 # (B, )
+
+        # compute log det loss
+        compute_batch_hessian = vmap(hessian(recon_loss_func, argnums = 2), in_dims = (None, 0, 0, None))
+        batch_hess = compute_batch_hessian(self.decoder, x, z_star, torch.exp(self.log_sigma_sq))
         
-        log_det_loss = torch.logdet((H)/((sigma ** 2).unsqueeze(1).unsqueeze(2)) + torch.eye(n).to(z_star)) / 2 # (B, )
+        log_det_loss = torch.logdet((batch_hess) + torch.eye(n).to(z_star)) / 2 # (B, )
         log_det_loss[torch.isnan(log_det_loss)] = 0
         log_det_loss[torch.isinf(log_det_loss)] = 0
 
-        energy_loss = (z_star ** 2).sum(dim=1) / 2 # (B, )
-
+        # compute sigma loss
         sigma_loss = D * torch.log(sigma) # (B, )
 
         neg_log_prob  = (recon_loss + log_det_loss + energy_loss + sigma_loss)
@@ -262,7 +287,8 @@ class EnergyAE(AE):
                 "recon_loss": recon_loss,
                 'log_det_loss': log_det_loss,
                 'energy_loss': energy_loss,
-                'sigma_loss': sigma_loss}
+                'sigma_loss': sigma_loss
+                }
 
     # def neg_log_prob(self, x, pretrain = False):    
     #     with torch.no_grad():
