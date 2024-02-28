@@ -99,7 +99,7 @@ class BaseTrainer:
             self.optimizer_pre = optim.Adam([# {'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
                                             {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
                                             # {'params': model.sigma.net.parameters(), 'lr': cfg.optimizer['lr_sigma']},
-                                            # {'params': model.log_sigma_sq, 'lr': cfg.optimizer['lr_sigma']},
+                                            {'params': model.log_sigma_sq, 'lr': cfg.optimizer['lr_sigma']},
                                             {'params': model.minimizer.parameters(), 'lr':cfg.optimizer['lr_encoder_pre']},
                                             
                             ])
@@ -134,8 +134,8 @@ class BaseTrainer:
                 optimizer = None
 
         # model.encoder.load_state_dict(torch.load(f"pretrained/encoder_vae_ho_1_0.01.pth"))
-        # model.decoder.load_state_dict(torch.load(f"pretrained/decoder_ho_1_lr_1e-4.pth"))
-        # model.minimizer.load_state_dict(torch.load(f"pretrained/minimizer_ho_1_1r_1e-4.pth"))
+        model.decoder.load_state_dict(torch.load(f"pretrained/decoder_ho_1_lr_1e-4.pth"))
+        model.minimizer.load_state_dict(torch.load(f"pretrained/minimizer_ho_1_lr_1e-4.pth"))
 
 
 
@@ -206,7 +206,7 @@ class BaseTrainer:
 
         # torch.save(model.encoder.state_dict(), f"pretrained/encoder_vae_ho_1_{model.sigma_sq}.pth")
         # torch.save(model.decoder.state_dict(), f"pretrained/decoder_ho_1_lr_1e-4.pth")
-        # torch.save(model.minimizer.state_dict(), f"pretrained/minimizer_ho_1_1r_1e-4.pth")
+        # torch.save(model.minimizer.state_dict(), f"pretrained/minimizer_ho_1_lr_1e-4.pth")
         # torch.save(model.sigma.net.state_dict(), f"pretrained/sigma_ho_1_.pth")
         self.save_model(model, logdir, i_iter="last")
         return model, best_val_loss
@@ -227,7 +227,7 @@ class BaseTrainer:
 
     def predict(self, m, dl, device, flatten=False, pretrain = False):
         """run prediction for the whole dataset"""
-        l_result = {"neg_log_prob": [], "recon_loss": [], "log_det_loss":[], "energy_loss":[], "sigma_loss": []}
+        l_result = {"neg_log_prob": [], "log_det_loss":[], "energy_loss":[], "sigma_loss": [], 'grad_loss': [], 'hess_loss': []}
         for x, _ in dl:
             # with torch.no_grad():
             if flatten:

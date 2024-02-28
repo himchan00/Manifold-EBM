@@ -5,7 +5,7 @@ import copy
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from matplotlib import cm
-from functorch import hessian, vmap
+from functorch import hessian, vmap, jacrev
 from torchvision.utils import make_grid
 from utils.utils import label_to_color, figure_to_array, PD_metric_to_ellipse
 from geometry import (
@@ -107,50 +107,73 @@ class EnergyAE(AE):
         
         return x
 
-    def pretrain_step(self, x, optimizer_pre, is_neg = False, **kwargs):
 
-        def recon_loss_func(decoder, x, z, sigma):
+    def pretrain_step(self, x, optimizer_pre, is_neg = False, **kwargs):
+        
+        s = 1.0
+
+        def energy_function(decoder, x, z, sigma):
             """
             decoder : decoder network
             x : input data (D)
             z : latent variable (n)
             sigma : noise level (1)
 
-            return : reconstruction loss ()
+            return : energy value ()
             """
             x_star = decoder(z).view(-1) # (D)
-            recon_loss = (x - x_star).pow(2).sum() / (2 * (sigma ** 2)) 
-            return recon_loss.squeeze()
+            recon_loss = (x - x_star).pow(2).sum() / (2 * (sigma ** 2))
+            latent_energy_loss = (z ** 2).sum() / 2
+            energy = recon_loss + latent_energy_loss
+            return energy.squeeze()
         
         optimizer_pre.zero_grad()
         z_star = self.minimizer(x) # (B, n)
-        z_star_detached = z_star.detach()
-        z_star_detached.requires_grad = True
+
         x = x.view(len(x), -1) # (B, D)
         sigma = torch.exp(self.log_sigma_sq)
         
         D = x.shape[1]
         n = z_star.shape[1]
 
-        # compute recon loss
-        x_star = self.decoder(z_star).view(len(x), -1) # (B, D)
-        recon_loss = (x - x_star).pow(2).sum(dim=1) / (2 * (sigma ** 2)) # (B, )
+        # compute energy
+        compute_energy = vmap(energy_function, in_dims = (None, 0, 0, None))
+        energy = compute_energy(self.decoder, x, z_star, sigma) # (B, )
 
-        # compute energy loss
-        energy_loss = (z_star ** 2).sum(dim=1) / 2 # (B, )
+        # gradient of energy
+        compute_grad = vmap(jacrev(energy_function, argnums = 2), in_dims = (None, 0, 0, None))
+        grad = compute_grad(self.decoder, x, z_star, sigma) # (B, n)
 
-        # compute log det loss
-        compute_batch_hessian = vmap(hessian(recon_loss_func, argnums = 2), in_dims = (None, 0, 0, None))
-        batch_hess = compute_batch_hessian(self.decoder, x, z_star_detached, torch.exp(self.log_sigma_sq))
+        # hessian of energy
+        compute_batch_hessian = vmap(hessian(energy_function, argnums = 2), in_dims = (None, 0, 0, None))
+        hess = compute_batch_hessian(self.decoder, x, z_star, sigma) # (B, n, n)
         
-        log_det_loss = torch.logdet((batch_hess) + torch.eye(n).to(z_star)) / 2 # (B, )
+        J = jacobian_of_f(self.decoder, z_star, create_graph=True)
+        G = J.permute(0, 2, 1)@J # (B, n, n)
+
+        # energy_loss
+        energy_loss = energy # (B, )
+
+        # log det loss
+        log_det_loss = torch.logdet(G) / 2 # (B, )
         log_det_loss[torch.isnan(log_det_loss)] = 0
         log_det_loss[torch.isinf(log_det_loss)] = 0
 
-        # compute sigma loss
-        sigma_loss = D * torch.log(sigma) # (B, )
+        # sigma loss
+        sigma_loss = (D-n) * torch.log(sigma) # (B, )
 
-        loss  = (recon_loss + log_det_loss + energy_loss + sigma_loss)/D
+        # second order loss
+        Trace_grad = (- grad.unsqueeze(1) @ torch.linalg.solve(G, grad.unsqueeze(2)) / 2).squeeze() # (B, )
+        Trace_hess = vmap(torch.trace)(torch.linalg.solve(G, hess)) # (B, )
+
+        grad_loss = Trace_grad * (s ** 2) * (sigma ** 2) / (2*n+4)
+        hess_loss = Trace_hess * (s ** 2) * (sigma ** 2) / (2*n+4)
+
+        # Geometric regularization
+        conformal_reg = conformal_distortion_measure(self.decoder, z_star, create_graph=True)
+
+
+        loss  = (energy_loss + log_det_loss + sigma_loss + grad_loss + hess_loss+ 0.01 * conformal_reg)/D #
         loss = loss.mean()
         loss.backward()
 
@@ -161,15 +184,18 @@ class EnergyAE(AE):
         optimizer_pre.step()
         if is_neg:
             return {"loss_neg": loss.item(),
-                    "AE/recon_loss_neg_": recon_loss.mean().item(),
                     "AE/log_det_loss_neg_": log_det_loss.mean().item(),
                     "AE/energy_loss_neg_": energy_loss.mean().item(),
+                    "AE/grad_loss_neg_": grad_loss.mean().item(),
+                    "AE/hess_loss_neg_": hess_loss.mean().item(),
                     "AE/sigma_neg_": sigma.mean().item()}
         else:
             return {"loss": loss.item(), 
-                    "AE/recon_loss_": recon_loss.mean().item(),
                     "AE/log_det_loss_": log_det_loss.mean().item(),
                     "AE/energy_loss_": energy_loss.mean().item(),
+                    "AE/grad_loss_": grad_loss.mean().item(),
+                    "AE/hess_loss_": hess_loss.mean().item(),
+                    "AE/conformal_reg_": conformal_reg.mean().item(),
                     "AE/sigma_": sigma.mean().item()}
         
     def train_step(self, x, neg_x, optimizer, **kwargs):
@@ -242,53 +268,75 @@ class EnergyAE(AE):
 
     
     def neg_log_prob(self, x, pretrain = False):    
-        def recon_loss_func(decoder, x, z, sigma):
+        s = 1.0
+
+        def energy_function(decoder, x, z, sigma):
             """
             decoder : decoder network
             x : input data (D)
             z : latent variable (n)
             sigma : noise level (1)
 
-            return : reconstruction loss ()
+            return : energy value ()
             """
             x_star = decoder(z).view(-1) # (D)
-            recon_loss = (x - x_star).pow(2).sum() / (2 * (sigma ** 2)) 
-            return recon_loss.squeeze()
+            recon_loss = (x - x_star).pow(2).sum() / (2 * (sigma ** 2))
+            latent_energy_loss = (z ** 2).sum() / 2
+            energy = recon_loss + latent_energy_loss
+            return energy.squeeze()
         
         z_star = self.minimizer(x) # (B, n)
-        # z_star_detached = z_star.detach()
-        # z_star_detached.requires_grad = True
+
         x = x.view(len(x), -1) # (B, D)
         sigma = torch.exp(self.log_sigma_sq)
         
         D = x.shape[1]
         n = z_star.shape[1]
 
-        # compute recon loss
-        x_star = self.decoder(z_star).view(len(x), -1) # (B, D)
-        recon_loss = (x - x_star).pow(2).sum(dim=1) / (2 * (sigma ** 2)) # (B, )
+        # compute energy
+        compute_energy = vmap(energy_function, in_dims = (None, 0, 0, None))
+        energy = compute_energy(self.decoder, x, z_star, sigma) # (B, )
 
-        # compute energy loss
-        energy_loss = (z_star ** 2).sum(dim=1) / 2 # (B, )
+        # gradient of energy
+        compute_grad = vmap(jacrev(energy_function, argnums = 2), in_dims = (None, 0, 0, None))
+        grad = compute_grad(self.decoder, x, z_star, sigma) # (B, n)
 
-        # compute log det loss
-        compute_batch_hessian = vmap(hessian(recon_loss_func, argnums = 2), in_dims = (None, 0, 0, None))
-        batch_hess = compute_batch_hessian(self.decoder, x, z_star, torch.exp(self.log_sigma_sq))
+        # hessian of energy
+        compute_batch_hessian = vmap(hessian(energy_function, argnums = 2), in_dims = (None, 0, 0, None))
+        hess = compute_batch_hessian(self.decoder, x, z_star, sigma) # (B, n, n)
         
-        log_det_loss = torch.logdet((batch_hess) + torch.eye(n).to(z_star)) / 2 # (B, )
+        J = jacobian_of_f(self.decoder, z_star, create_graph=True)
+        G = J.permute(0, 2, 1)@J # (B, n, n)
+
+        # energy_loss
+        energy_loss = energy # (B, )
+
+        # log det loss
+        log_det_loss = torch.logdet(G) / 2 # (B, )
         log_det_loss[torch.isnan(log_det_loss)] = 0
         log_det_loss[torch.isinf(log_det_loss)] = 0
+        # sigma loss
+        sigma_loss = (D-n) * torch.log(sigma) # (B, )
 
-        # compute sigma loss
-        sigma_loss = D * torch.log(sigma) # (B, )
+        # second order loss
+        Trace_grad = (- grad.unsqueeze(1) @ torch.linalg.solve(G, grad.unsqueeze(2)) / 2).squeeze() # (B, )
+        Trace_hess = vmap(torch.trace)(torch.linalg.solve(G, hess)) # (B, )
 
-        neg_log_prob  = (recon_loss + log_det_loss + energy_loss + sigma_loss)
+        grad_loss = Trace_grad * (s ** 2) * (sigma ** 2) / (2*n+4)
+        hess_loss = Trace_hess * (s ** 2) * (sigma ** 2) / (2*n+4)
+
+        # log_det_loss[torch.isnan(log_det_loss)] = 0
+        # log_det_loss[torch.isinf(log_det_loss)] = 0
+
+
+        neg_log_prob  = (energy_loss + log_det_loss + sigma_loss + grad_loss + hess_loss)
+
         return {"neg_log_prob": neg_log_prob,
-                "recon_loss": recon_loss,
                 'log_det_loss': log_det_loss,
                 'energy_loss': energy_loss,
-                'sigma_loss': sigma_loss
-                }
+                'sigma_loss': sigma_loss,
+                'grad_loss': grad_loss,
+                'hess_loss': hess_loss}
 
     # def neg_log_prob(self, x, pretrain = False):    
     #     with torch.no_grad():
