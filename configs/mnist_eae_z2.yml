@@ -49,7 +49,7 @@ model:
   min_sigma_sq: 1e-3
   max_sigma_sq: 10
   energy_ae:
-    sigma_sq: 0.15
+    sigma_sq: 0.1
     curvature_reg: 1.0
     n_eval: 10
     train_sigma: True
@@ -106,7 +106,7 @@ data:
   
 trainer: base
 training:
-  n_epoch: 1000
+  n_epoch: 300
   n_epoch_pre: 100
   n_epoch_ebm: 30
   fix_decoder: false
@@ -118,7 +118,7 @@ training:
     lr_encoder_pre: 1e-4
     lr_decoder: 1e-5
     lr_energy: 1e-3
-    lr_sigma: 1e-3
+    lr_sigma: 1e-4
   print_interval: 200
   val_interval: 200
   visualize_interval: 200
