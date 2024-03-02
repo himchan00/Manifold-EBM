@@ -106,7 +106,7 @@ data:
   
 trainer: base
 training:
-  n_epoch: 100
+  n_epoch: 1000
   n_epoch_pre: 100
   n_epoch_ebm: 30
   fix_decoder: false

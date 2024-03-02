@@ -205,8 +205,8 @@ class BaseTrainer:
                 i_iter += 1
 
         # torch.save(model.encoder.state_dict(), f"pretrained/encoder_vae_ho_1_{model.sigma_sq}.pth")
-        # torch.save(model.decoder.state_dict(), f"pretrained/decoder_ho_1_lr_1e-4.pth")
-        # torch.save(model.minimizer.state_dict(), f"pretrained/minimizer_ho_1_lr_1e-4.pth")
+        torch.save(model.decoder.state_dict(), f"pretrained/decoder_ho_1_lr_1e-4_second_order_no_reg.pth")
+        torch.save(model.minimizer.state_dict(), f"pretrained/minimizer_ho_1_lr_1e-4_second_order_no_reg.pth")
         # torch.save(model.sigma.net.state_dict(), f"pretrained/sigma_ho_1_.pth")
         self.save_model(model, logdir, i_iter="last")
         return model, best_val_loss
@@ -227,7 +227,8 @@ class BaseTrainer:
 
     def predict(self, m, dl, device, flatten=False, pretrain = False):
         """run prediction for the whole dataset"""
-        l_result = {"neg_log_prob": [], "log_det_loss":[], "energy_loss":[], "sigma_loss": [], 'grad_loss': [], 'hess_loss': []}
+        l_result = {"neg_log_prob": [], "log_det_loss":[], "energy_loss":[], "sigma_loss": [], \
+                    'grad_loss': [], 'hess_loss': [], 'volume_loss': [], 'moment_loss': []}
         for x, _ in dl:
             # with torch.no_grad():
             if flatten:

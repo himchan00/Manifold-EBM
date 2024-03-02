@@ -4,6 +4,7 @@ import torch.nn as nn
 import copy
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+from functools import partial
 from matplotlib import cm
 from functorch import hessian, vmap, jacrev
 from torchvision.utils import make_grid
@@ -127,6 +128,11 @@ class EnergyAE(AE):
             energy = recon_loss + latent_energy_loss
             return energy.squeeze()
         
+        def half_riemannian_metric(decoder, z, create_graph=True):
+            J = jacobian_of_f(decoder, z, create_graph=create_graph)
+            G = J.permute(0, 2, 1)@J + 1e-3* torch.eye(z.shape[1]).to(z)
+            return G/2
+
         optimizer_pre.zero_grad()
         z_star = self.minimizer(x) # (B, n)
 
@@ -148,8 +154,17 @@ class EnergyAE(AE):
         compute_batch_hessian = vmap(hessian(energy_function, argnums = 2), in_dims = (None, 0, 0, None))
         hess = compute_batch_hessian(self.decoder, x, z_star, sigma) # (B, n, n)
         
+
         J = jacobian_of_f(self.decoder, z_star, create_graph=True)
-        G = J.permute(0, 2, 1)@J # (B, n, n)
+        G = J.permute(0, 2, 1)@J + 1e-3* torch.eye(n).to(z_star)  # (B, n, n)
+        sqrt_G = torch.linalg.cholesky(G, upper=True)
+
+        n_hat = torch.randn_like(z_star)
+        n_hat = n_hat / n_hat.norm(dim=1, keepdim=True)
+        v = torch.linalg.solve(sqrt_G, n_hat.unsqueeze(2)).squeeze() # (B, n)
+        _, C = torch.autograd.functional.jvp(partial(half_riemannian_metric, self.decoder), z_star, v, create_graph=True)
+        c = (v.unsqueeze(1) @ C @ v.unsqueeze(2)).squeeze() # (B,)
+        c_sq = c ** 2
 
         # energy_loss
         energy_loss = energy # (B, )
@@ -163,17 +178,22 @@ class EnergyAE(AE):
         sigma_loss = (D-n) * torch.log(sigma) # (B, )
 
         # second order loss
-        Trace_grad = (- grad.unsqueeze(1) @ torch.linalg.solve(G, grad.unsqueeze(2)) / 2).squeeze() # (B, )
+        # intrgrand part
+        Trace_grad = (- grad.unsqueeze(1) @ torch.linalg.solve(G, grad.unsqueeze(2))).squeeze() # (B, )
         Trace_hess = vmap(torch.trace)(torch.linalg.solve(G, hess)) # (B, )
 
-        grad_loss = Trace_grad * (s ** 2) * (sigma ** 2) / (2*n+4)
-        hess_loss = Trace_hess * (s ** 2) * (sigma ** 2) / (2*n+4)
+        grad_loss = Trace_grad * (s ** 2) * (sigma.detach() ** 2) / (2*n+4)
+        hess_loss = Trace_hess * (s ** 2) * (sigma.detach() ** 2) / (2*n+4)
 
-        # Geometric regularization
-        conformal_reg = conformal_distortion_measure(self.decoder, z_star, create_graph=True)
+       # integration area part
+        volume_loss = - c_sq * (s ** 2) * (sigma.detach() ** 2) * n * (n+4)/ (8)
+        moment_loss = - (grad.unsqueeze(1) @ v.unsqueeze(2)).squeeze() * n * (s ** 2) * (sigma.detach() ** 2) /(2)
+        volume_loss = volume_loss.detach()
+        moment_loss = moment_loss.detach()
+        
+        second_order_loss = grad_loss + hess_loss + volume_loss + moment_loss
 
-
-        loss  = (energy_loss + log_det_loss + sigma_loss + grad_loss + hess_loss+ 0.01 * conformal_reg)/D #
+        loss  = (energy_loss + log_det_loss + sigma_loss + second_order_loss)/D #0.01 * conformal_reg
         loss = loss.mean()
         loss.backward()
 
@@ -188,15 +208,22 @@ class EnergyAE(AE):
                     "AE/energy_loss_neg_": energy_loss.mean().item(),
                     "AE/grad_loss_neg_": grad_loss.mean().item(),
                     "AE/hess_loss_neg_": hess_loss.mean().item(),
-                    "AE/sigma_neg_": sigma.mean().item()}
+                    "AE/volume_loss_neg_": volume_loss.mean().item(),
+                    "AE/moment_loss_neg_": moment_loss.mean().item(),
+                    'AE/second_order_loss_neg_': second_order_loss.mean().item(),
+                    "AE/sigma_neg_": sigma.mean().item(),
+                    "AE/c_neg_": c.mean().item()}
         else:
             return {"loss": loss.item(), 
                     "AE/log_det_loss_": log_det_loss.mean().item(),
                     "AE/energy_loss_": energy_loss.mean().item(),
                     "AE/grad_loss_": grad_loss.mean().item(),
                     "AE/hess_loss_": hess_loss.mean().item(),
-                    "AE/conformal_reg_": conformal_reg.mean().item(),
-                    "AE/sigma_": sigma.mean().item()}
+                    "AE/volume_loss_": volume_loss.mean().item(),
+                    "AE/moment_loss_": moment_loss.mean().item(),
+                    'AE/second_order_loss_': second_order_loss.mean().item(),
+                    "AE/sigma_": sigma.mean().item(),
+                    "AE/c_": c.mean().item()}
         
     def train_step(self, x, neg_x, optimizer, **kwargs):
         optimizer.zero_grad()
@@ -284,7 +311,12 @@ class EnergyAE(AE):
             latent_energy_loss = (z ** 2).sum() / 2
             energy = recon_loss + latent_energy_loss
             return energy.squeeze()
-        
+
+        def half_riemannian_metric(decoder, z, create_graph=True):
+            J = jacobian_of_f(decoder, z, create_graph=create_graph)
+            G = J.permute(0, 2, 1)@J + 1e-3* torch.eye(z.shape[1]).to(z)
+            return G/2
+
         z_star = self.minimizer(x) # (B, n)
 
         x = x.view(len(x), -1) # (B, D)
@@ -305,8 +337,17 @@ class EnergyAE(AE):
         compute_batch_hessian = vmap(hessian(energy_function, argnums = 2), in_dims = (None, 0, 0, None))
         hess = compute_batch_hessian(self.decoder, x, z_star, sigma) # (B, n, n)
         
+
         J = jacobian_of_f(self.decoder, z_star, create_graph=True)
-        G = J.permute(0, 2, 1)@J # (B, n, n)
+        G = J.permute(0, 2, 1)@J + 1e-3* torch.eye(n).to(z_star)  # (B, n, n)
+        sqrt_G = torch.linalg.cholesky(G, upper=True)
+
+        n_hat = torch.randn_like(z_star)
+        n_hat = n_hat / n_hat.norm(dim=1, keepdim=True)
+        v = torch.linalg.solve(sqrt_G, n_hat.unsqueeze(2)).squeeze() # (B, n)
+        _, C = torch.autograd.functional.jvp(partial(half_riemannian_metric, self.decoder), z_star, v, create_graph=True)
+        c = (v.unsqueeze(1) @ C @ v.unsqueeze(2)).squeeze()# (B,)
+        c_sq = c ** 2
 
         # energy_loss
         energy_loss = energy # (B, )
@@ -315,28 +356,32 @@ class EnergyAE(AE):
         log_det_loss = torch.logdet(G) / 2 # (B, )
         log_det_loss[torch.isnan(log_det_loss)] = 0
         log_det_loss[torch.isinf(log_det_loss)] = 0
+
         # sigma loss
         sigma_loss = (D-n) * torch.log(sigma) # (B, )
 
         # second order loss
-        Trace_grad = (- grad.unsqueeze(1) @ torch.linalg.solve(G, grad.unsqueeze(2)) / 2).squeeze() # (B, )
+        # intrgrand part
+        Trace_grad = (- grad.unsqueeze(1) @ torch.linalg.solve(G, grad.unsqueeze(2))).squeeze() # (B, )
         Trace_hess = vmap(torch.trace)(torch.linalg.solve(G, hess)) # (B, )
 
         grad_loss = Trace_grad * (s ** 2) * (sigma ** 2) / (2*n+4)
         hess_loss = Trace_hess * (s ** 2) * (sigma ** 2) / (2*n+4)
 
-        # log_det_loss[torch.isnan(log_det_loss)] = 0
-        # log_det_loss[torch.isinf(log_det_loss)] = 0
+       # integration area part
+        volume_loss = - c_sq * (s ** 2) * (sigma ** 2) * n * (n+4)/ 8
+        moment_loss = - (grad.unsqueeze(1) @ v.unsqueeze(2)).squeeze() * n * (s ** 2) * (sigma ** 2) /2
 
-
-        neg_log_prob  = (energy_loss + log_det_loss + sigma_loss + grad_loss + hess_loss)
+        neg_log_prob  = (energy_loss + log_det_loss + sigma_loss + grad_loss + hess_loss + volume_loss + moment_loss)
 
         return {"neg_log_prob": neg_log_prob,
                 'log_det_loss': log_det_loss,
                 'energy_loss': energy_loss,
                 'sigma_loss': sigma_loss,
                 'grad_loss': grad_loss,
-                'hess_loss': hess_loss}
+                'hess_loss': hess_loss,
+                'volume_loss': volume_loss,
+                'moment_loss': moment_loss}
 
     # def neg_log_prob(self, x, pretrain = False):    
     #     with torch.no_grad():
