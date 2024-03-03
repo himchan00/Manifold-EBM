@@ -21,6 +21,62 @@ from geometry import (
     conformal_distortion_measure,
     curvature_reg,
 )
+import scipy
+class erfi(torch.autograd.Function):
+    
+    @staticmethod
+    def forward(ctx, input):
+        ctx.save_for_backward(input)
+        input_npy = input.detach().cpu().numpy()
+        output_npy = scipy.special.erfi(input_npy)
+        return torch.as_tensor(output_npy, dtype=input.dtype).to(input.device)
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        input, = ctx.saved_tensors
+        grad_input = 2 * torch.exp(input ** 2) / (np.pi ** 0.5)
+        return grad_output * grad_input
+    
+class dawson(torch.autograd.Function):
+    """
+    dawson(x) = exp(-x^2) erfi(x) * sqrt(pi) / 2
+    """
+
+    @staticmethod
+    def forward(ctx, input):
+        ctx.save_for_backward(input)
+        input_npy = input.detach().cpu().numpy()
+        output_npy = scipy.special.dawsn(input_npy)
+        return torch.as_tensor(output_npy, dtype=input.dtype).to(input.device)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        input, = ctx.saved_tensors
+        input_npy = input.detach().cpu().numpy()
+        grad_input_npy = -2 * input_npy * scipy.special.dawsn(input_npy) + 1
+        grad_input = torch.as_tensor(grad_input_npy, dtype=input.dtype).to(input.device)
+        return grad_output * grad_input
+    
+class erfcx(torch.autograd.Function):
+    """
+    erfcx(x) = exp(x^2) erfc(x)
+    """
+
+    @staticmethod
+    def forward(ctx, input):
+        ctx.save_for_backward(input)
+        input_npy = input.detach().cpu().numpy()
+        output_npy = scipy.special.erfcx(input_npy)
+        return torch.as_tensor(output_npy, dtype=input.dtype).to(input.device)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        input, = ctx.saved_tensors
+        input_npy = input.detach().cpu().numpy()
+        grad_input_npy = 2 * input_npy * scipy.special.erfcx(input_npy) - 2 / np.pi ** 0.5
+        grad_input = torch.as_tensor(grad_input_npy, dtype=input.dtype).to(input.device)
+        return grad_output * grad_input
+
 
 def jacobian(output, input_tensor):
     """
@@ -129,6 +185,7 @@ class EnergyAE(AE):
         x = x.view(len(x), -1) # (B, D)
         sigma = torch.exp(self.log_sigma_sq)
 
+        bs = x.shape[0]
         D = x.shape[1]
         n = z_star.shape[1]
 
@@ -138,28 +195,93 @@ class EnergyAE(AE):
 
         # gradient of energy
         compute_grad = vmap(jacrev(self.energy_function, argnums = 1), in_dims = (0, 0))
-        grad = compute_grad(x, z_star.detach()) # (B, n)
+        grad = compute_grad(x, z_star) # (B, n)
 
+        J = jacobian_of_f(self.decoder, z_star, create_graph=True)
+        G = J.permute(0, 2, 1)@J + 1e-3* torch.eye(z_star.shape[1]).to(z_star)
+        U = torch.linalg.cholesky(G, upper=True) # U^T U = G
+        
         # hessian of energy
         compute_batch_hessian = vmap(hessian(self.energy_function, argnums = 1), in_dims = (0, 0))
-        hess = compute_batch_hessian(x, z_star.detach()) # (B, n, n)
-
+        hess = compute_batch_hessian(x, z_star) # (B, n, n)
+        A = torch.linalg.solve(U.permute(0, 2, 1), (torch.linalg.solve(U.permute(0, 2, 1), hess)).permute(0, 2, 1)) # (U^{-1})^THU^{-1} (B, n, n)
+        eigvals_h, Q = torch.linalg.eigh(A) # A = Q \Lambda Q^T
+        eigvals_sh = torch.linalg.eigvalsh(A) 
+        error = torch.norm(eigvals_h - eigvals_sh)
         # energy_loss
         energy_loss = energy # (B, )
 
         # log det loss
-        X = hess - grad.unsqueeze(2) @ grad.unsqueeze(1)
-        log_det_loss = torch.logdet(X) / 2 # (B, )
+        log_det_loss = torch.logdet(G) / 2 # (B, )
         log_det_loss[torch.isnan(log_det_loss)] = 0
         log_det_loss[torch.isinf(log_det_loss)] = 0
+
+
+        # curvature loss
+        s = 0.5
+        radius = s * sigma.detach()
+        a = eigvals_sh.view(-1) # (B*n, )
+        b =  (Q.permute(0, 2, 1) @ torch.linalg.solve(U.permute(0, 2, 1), grad.unsqueeze(2))).squeeze().view(-1) # (B*n, )
+        b = torch.abs(b)
+        mask = a >= 0
+        pos_a = a[mask]
+        pos_b = b[mask]
+        neg_a = a[~mask]
+        neg_b = b[~mask]
+        if len(pos_a) > 0:
+            sqrt_pos_a = torch.sqrt(pos_a)
+            z_start = (pos_b - 2*pos_a*radius)/(2*sqrt_pos_a)
+            z_end = (pos_b + 2*pos_a*radius)/(2*sqrt_pos_a)
+            mean = pos_b/(2*sqrt_pos_a)
+            mask = z_start < 0
+            z_start_neg = z_start[mask]
+            z_start_pos = z_start[~mask]
+            pos_a_neg = pos_a[mask]
+            pos_a_pos = pos_a[~mask]
+            mean_neg = mean[mask]
+            mean_pos = mean[~mask]
+
+            z_end_neg = z_end[mask]
+            z_end_pos = z_end[~mask]
+            if len(z_start_neg) > 0:
+                pos_log_scale_neg =  -torch.log(2*torch.exp(mean_neg**2) - torch.exp(mean_neg**2-z_end_neg ** 2) * erfcx.apply(z_end_neg) - torch.exp(mean_neg**2-z_start_neg ** 2) * erfcx.apply(-z_start_neg)) + torch.log(pos_a_neg)/2
+                pos_log_scale_neg[torch.isnan(pos_log_scale_neg)] = 0
+                pos_log_scale_neg[torch.isinf(pos_log_scale_neg)] = 0
+            else:
+                pos_log_scale_neg = torch.tensor(0.0)
+            if len(z_start_pos) > 0:
+                pos_log_scale_pos = - torch.log(torch.exp(mean_pos**2 - z_start_pos**2)* erfcx.apply(z_start_pos) - torch.exp(mean_pos**2 - z_end_pos ** 2) * erfcx.apply(z_end_pos)) + torch.log(pos_a_pos)/2
+                pos_log_scale_pos[torch.isnan(pos_log_scale_pos)] = 0
+                pos_log_scale_pos[torch.isinf(pos_log_scale_pos)] = 0
+            else:
+                pos_log_scale_pos = torch.tensor(0.0)
+            pos_log_scale = torch.cat([pos_log_scale_neg, pos_log_scale_pos], dim = 0)
+        else:
+            pos_log_scale = torch.tensor(0.0)
+        if len(neg_a) > 0:
+            sqrt_neg_a = torch.sqrt(-neg_a)
+            z_start = (neg_b + 2*neg_a*radius)/(2*sqrt_neg_a)
+            z_end = (neg_b - 2*neg_a*radius)/(2*sqrt_neg_a)
+            mean = neg_b/(2*sqrt_neg_a)
+            neg_log_scale = - torch.log(torch.exp(z_end ** 2 - mean ** 2) * dawson.apply(z_end) - torch.exp(z_start**2 - mean**2) * dawson.apply(z_start)) \
+                + torch.log(-neg_a)/2 - torch.log(torch.tensor(2/np.pi**0.5))
+            neg_log_scale[torch.isnan(neg_log_scale)] = 0
+            neg_log_scale[torch.isinf(neg_log_scale)] = 0
+        else:
+            neg_log_scale = torch.tensor(0.0)
+        if len(pos_a) > 0 and len(neg_a) > 0:
+            scale = torch.cat([pos_log_scale, neg_log_scale], dim = 0)
+        elif len(pos_a) > 0:
+            scale = pos_log_scale
+        else:
+            scale = neg_log_scale
+        curvature_loss = scale.sum()/bs
 
         # sigma loss
         sigma_loss = (D) * torch.log(sigma) # (B, )
 
-        # constant term
-        constant_term = (D-n)/2 * torch.log(2 * torch.tensor(np.pi)) + torch.lgamma(torch.tensor(n/2+2))
 
-        loss = (energy_loss + log_det_loss + sigma_loss + constant_term)/D
+        loss = (energy_loss + log_det_loss + sigma_loss + curvature_loss)/D
         loss = loss.mean()
         loss.backward()
 
@@ -177,7 +299,12 @@ class EnergyAE(AE):
             return {"loss": loss.item(),
                     "pre/log_det_loss_": log_det_loss.mean().item(),
                     "pre/energy_loss_": energy_loss.mean().item(),
-                    "pre/sigma_": sigma.mean().item()}
+                    "pre/cuvature_loss_": curvature_loss.mean().item(),
+                    "pre/sigma_": sigma.mean().item(),
+                    "pre/pos_log_scale_": pos_log_scale.mean().item(),
+                    "pre/neg_log_scale_": neg_log_scale.mean().item(),
+                    "pre/error_": error.item(),
+                    }   
     
     def pretrain_step(self, x, optimizer_pre, is_neg = False, **kwargs):
 
@@ -476,11 +603,12 @@ class EnergyAE(AE):
 
     
     def neg_log_prob(self, x, pretrain = False):    
-        z_star = self.minimizer(x) # (B, n)
+        z_star = self.minimizer(x)
 
         x = x.view(len(x), -1) # (B, D)
         sigma = torch.exp(self.log_sigma_sq)
-        
+
+        bs = x.shape[0]
         D = x.shape[1]
         n = z_star.shape[1]
 
@@ -492,21 +620,17 @@ class EnergyAE(AE):
         compute_grad = vmap(jacrev(self.energy_function, argnums = 1), in_dims = (0, 0))
         grad = compute_grad(x, z_star) # (B, n)
 
+        J = jacobian_of_f(self.decoder, z_star, create_graph=True)
+        G = J.permute(0, 2, 1)@J + 1e-3* torch.eye(z_star.shape[1]).to(z_star)
+        U = torch.linalg.cholesky(G, upper=True) # U^T U = G
+        
         # hessian of energy
         compute_batch_hessian = vmap(hessian(self.energy_function, argnums = 1), in_dims = (0, 0))
         hess = compute_batch_hessian(x, z_star) # (B, n, n)
-        
-
-        G = self.half_riemannian_metric(z_star) * 2  # (B, n, n)
-        sqrt_G = torch.linalg.cholesky(G, upper=True)
-
-        n_hat = torch.randn_like(z_star)
-        n_hat = n_hat / n_hat.norm(dim=1, keepdim=True)
-        v = torch.linalg.solve(sqrt_G, n_hat.unsqueeze(2)).squeeze() # (B, n)
-        _, C = torch.autograd.functional.jvp(self.half_riemannian_metric, z_star, v, create_graph=True)
-        c = (v.unsqueeze(1) @ C @ v.unsqueeze(2)).squeeze() # (B,)
-        c_sq = c ** 2
-
+        A = torch.linalg.solve(U.permute(0, 2, 1), (torch.linalg.solve(U.permute(0, 2, 1), hess)).permute(0, 2, 1)) # (U^{-1})^THU^{-1} (B, n, n)
+        eigvals_h, Q = torch.linalg.eigh(A) # A = Q \Lambda Q^T
+        eigvals_sh = torch.linalg.eigvalsh(A) 
+        error = torch.norm(eigvals_h - eigvals_sh)
         # energy_loss
         energy_loss = energy # (B, )
 
@@ -515,40 +639,78 @@ class EnergyAE(AE):
         log_det_loss[torch.isnan(log_det_loss)] = 0
         log_det_loss[torch.isinf(log_det_loss)] = 0
 
+
+        # curvature loss
+        s = 1.5
+        radius = s * sigma.detach()
+        a = eigvals_sh.view(-1) # (B*n, )
+        b =  (Q.permute(0, 2, 1) @ torch.linalg.solve(U.permute(0, 2, 1), grad.unsqueeze(2))).squeeze().view(-1) # (B*n, )
+        b = torch.abs(b)
+        mask = a >= 0
+        pos_a = a[mask]
+        pos_b = b[mask]
+        neg_a = a[~mask]
+        neg_b = b[~mask]
+        if len(pos_a) > 0:
+            sqrt_pos_a = torch.sqrt(pos_a)
+            z_start = (pos_b - 2*pos_a*radius)/(2*sqrt_pos_a)
+            z_end = (pos_b + 2*pos_a*radius)/(2*sqrt_pos_a)
+            mean = pos_b/(2*sqrt_pos_a)
+            mask = z_start < 0
+            z_start_neg = z_start[mask]
+            z_start_pos = z_start[~mask]
+            pos_a_neg = pos_a[mask]
+            pos_a_pos = pos_a[~mask]
+            mean_neg = mean[mask]
+            mean_pos = mean[~mask]
+
+            z_end_neg = z_end[mask]
+            z_end_pos = z_end[~mask]
+            if len(z_start_neg) > 0:
+                pos_log_scale_neg =  -torch.log(2*torch.exp(mean_neg**2) - torch.exp(mean_neg**2-z_end_neg ** 2) * erfcx.apply(z_end_neg) - torch.exp(mean_neg**2-z_start_neg ** 2) * erfcx.apply(-z_start_neg)) + torch.log(pos_a_neg)/2
+                pos_log_scale_neg[torch.isnan(pos_log_scale_neg)] = 0
+                pos_log_scale_neg[torch.isinf(pos_log_scale_neg)] = 0
+            else:
+                pos_log_scale_neg = torch.tensor(0.0)
+            if len(z_start_pos) > 0:
+                pos_log_scale_pos = - torch.log(torch.exp(mean_pos**2 - z_start_pos**2)* erfcx.apply(z_start_pos) - torch.exp(mean_pos**2 - z_end_pos ** 2) * erfcx.apply(z_end_pos)) + torch.log(pos_a_pos)/2
+                pos_log_scale_pos[torch.isnan(pos_log_scale_pos)] = 0
+                pos_log_scale_pos[torch.isinf(pos_log_scale_pos)] = 0
+            else:
+                pos_log_scale_pos = torch.tensor(0.0)
+            pos_log_scale = torch.cat([pos_log_scale_neg, pos_log_scale_pos], dim = 0)
+        else:
+            pos_log_scale = torch.tensor(0.0)
+        if len(neg_a) > 0:
+            sqrt_neg_a = torch.sqrt(-neg_a)
+            z_start = (neg_b + 2*neg_a*radius)/(2*sqrt_neg_a)
+            z_end = (neg_b - 2*neg_a*radius)/(2*sqrt_neg_a)
+            mean = neg_b/(2*sqrt_neg_a)
+            neg_log_scale = - torch.log(torch.exp(z_end ** 2 - mean ** 2) * dawson.apply(z_end) - torch.exp(z_start**2 - mean**2) * dawson.apply(z_start)) \
+                + torch.log(-neg_a)/2 - torch.log(torch.tensor(2/np.pi**0.5))
+            neg_log_scale[torch.isnan(neg_log_scale)] = 0
+            neg_log_scale[torch.isinf(neg_log_scale)] = 0
+        else:
+            neg_log_scale = torch.tensor(0.0)
+        if len(pos_a) > 0 and len(neg_a) > 0:
+            scale = torch.cat([pos_log_scale, neg_log_scale], dim = 0)
+        elif len(pos_a) > 0:
+            scale = pos_log_scale
+        else:
+            scale = neg_log_scale
+        curvature_loss = scale.sum()/bs
+
         # sigma loss
         sigma_loss = (D) * torch.log(sigma) # (B, )
 
-        # second order loss
-        # intrgrand part
-        s = 2.0
-        sigma_detached = sigma.detach()
-        radius = s * sigma_detached
-        Trace_grad = (- grad.unsqueeze(1) @ torch.linalg.solve(G, grad.unsqueeze(2))).squeeze() # (B, )
-        Trace_hess = vmap(torch.trace)(torch.linalg.solve(G, hess)) # (B, )
-
-        grad_term = Trace_grad / (2*n+4)
-        hess_term = Trace_hess / (2*n+4)
-
-       # integration area part
-        volume_term = - c_sq * (5*n)/ (8)
-        moment_term = - (grad.unsqueeze(1) @ v.unsqueeze(2)).squeeze() * n /(2)
-        
-        second_order_term = grad_term + hess_term + volume_term + moment_term
-        ratio = 1 - second_order_term * (radius ** 2)
-        ratio = ratio.clamp(min=1e-8, max = 2)
-        second_order_loss = - torch.log(ratio)
-        
-        # constant term
-        constant_term = -n/2 * torch.log(torch.tensor(np.pi)) + D/2 * torch.log(2*torch.tensor(np.pi))\
-              + torch.lgamma(torch.tensor(n/2+1)) - n *torch.log(radius)
-
-        neg_log_prob  = (energy_loss + log_det_loss + sigma_loss + second_order_loss + constant_term)/D
+        neg_log_prob  = (energy_loss + log_det_loss + sigma_loss + curvature_loss)/D
 
         return {"neg_log_prob": neg_log_prob,
                 'log_det_loss': log_det_loss,
                 'energy_loss': energy_loss,
                 'sigma_loss': sigma_loss,
-                'second_order_loss': second_order_loss}
+                #'curvature_loss': curvature_loss
+        }
 
     def new_neg_log_prob(self, x, pretrain = False):
         z_star = self.minimizer(x)
