@@ -83,28 +83,16 @@ class BaseTrainer:
         # model.ebm.net.fc_nets.load_state_dict(torch.load("pretrained/ebm_ho_9_z_dim_15.pth"))
 
         # model.sigma.decoder = copy.deepcopy(model.decoder)
-        min_param = []
-        min_names = ['fc1.weight', 'fc1.bias', 'fc2.weight', 'fc2.bias', 'fc3.weight', 'fc3.bias',\
-                     'fc4_e.weight', 'fc4_e.bias', 'fc5_e.weight', 'fc5_e.bias', 'fc6_e.weight', 'fc6_e.bias']
-        sigma_param = []
-        sigma_names = ['fc4_s.weight', 'fc4_s.bias', 'fc5_s.weight', 'fc5_s.bias', 'fc6_s.weight', 'fc6_s.bias']
-        for name, param in model.minimizer.named_parameters():
-            if name in min_names:
-                min_param.append(param)
-            elif name in sigma_names:
-                sigma_param.append(param)
-            else:
-                raise ValueError(f'Unexpected parameter name: {name}')
         if not cfg['fix_decoder']:
             self.optimizer_pre = optim.Adam([# {'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
                                             {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
                                             # {'params': model.sigma.net.parameters(), 'lr': cfg.optimizer['lr_sigma']},
-                                            {'params': model.log_sigma_sq, 'lr': cfg.optimizer['lr_sigma']},
+                                            # {'params': model.log_sigma_sq, 'lr': cfg.optimizer['lr_sigma']},
                                             {'params': model.minimizer.parameters(), 'lr':cfg.optimizer['lr_encoder_pre']},
                                             
                             ])
-            self.optimizer_min = optim.Adam([{'params': model.minimizer.parameters(), 'lr':cfg.optimizer['lr_encoder_pre']},
-                                              {'params': model.log_sigma_sq, 'lr': cfg.optimizer['lr_sigma']},]
+            self.optimizer_min = optim.Adam([{'params': model.minimizer.parameters(), 'lr':cfg.optimizer['lr_encoder_pre']}]
+                                            #  {'params': model.log_sigma_sq, 'lr': cfg.optimizer['lr_sigma']},]
                                             )
             
             if model.train_sigma:
@@ -136,8 +124,8 @@ class BaseTrainer:
                 optimizer = None
 
         # model.encoder.load_state_dict(torch.load(f"pretrained/encoder_vae_ho_1_0.01.pth"))
-        model.decoder.load_state_dict(torch.load(f"pretrained/decoder_ho_1_lr_1e-4.pth"))
-        model.minimizer.load_state_dict(torch.load(f"pretrained/minimizer_ho_1_lr_1e-4.pth"))
+        # model.decoder.load_state_dict(torch.load(f"pretrained/decoder_ho_1_lr_1e-4_original.pth"))
+        # model.minimizer.load_state_dict(torch.load(f"pretrained/minimizer_ho_1_lr_1e-4_original.pth"))
 
 
 
@@ -207,8 +195,8 @@ class BaseTrainer:
                 i_iter += 1
 
         # torch.save(model.encoder.state_dict(), f"pretrained/encoder_vae_ho_1_{model.sigma_sq}.pth")
-        torch.save(model.decoder.state_dict(), f"pretrained/decoder_ho_1_lr_1e-4_new.pth")
-        torch.save(model.minimizer.state_dict(), f"pretrained/minimizer_ho_1_lr_1e-4_new.pth")
+        torch.save(model.decoder.state_dict(), f"pretrained/decoder_ho_1_lr_1e-4_reg_1.0.pth")
+        torch.save(model.minimizer.state_dict(), f"pretrained/minimizer_ho_1_lr_1e-4_reg_1.0.pth")
         # torch.save(model.sigma.net.state_dict(), f"pretrained/sigma_ho_1_.pth")
         self.save_model(model, logdir, i_iter="last")
         return model, best_val_loss
@@ -229,12 +217,12 @@ class BaseTrainer:
 
     def predict(self, m, dl, device, flatten=False, pretrain = False):
         """run prediction for the whole dataset"""
-        l_result = {"neg_log_prob": [], "log_det_loss":[], "energy_loss":[], "sigma_loss": []}
+        l_result = {"neg_log_prob": [], "recon_loss": [], "invariant_energy": [], "sigma": [], "second_order_loss": []}
         for x, _ in dl:
             # with torch.no_grad():
             if flatten:
                 x = x.view(len(x), -1)
-            pred = m.neg_log_prob(x.cuda(device), pretrain=pretrain)
+            pred = m.new_neg_log_prob(x.cuda(device), pretrain=pretrain)
 
             for key, val in pred.items():
                 l_result[key].append(val.detach().cpu())

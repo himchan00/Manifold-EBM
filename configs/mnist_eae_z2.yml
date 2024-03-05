@@ -118,7 +118,7 @@ training:
     lr_encoder_pre: 1e-4
     lr_decoder: 1e-4
     lr_energy: 1e-3
-    lr_sigma: 1e-4
+    lr_sigma: 1e-5
   print_interval: 200
   val_interval: 200
   visualize_interval: 200

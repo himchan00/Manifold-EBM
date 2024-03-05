@@ -112,6 +112,10 @@ class FC_for_decoder_and_sigma(nn.Module):
         self.fc5_d = nn.Linear(1024, 1024)
         self.fc6_d = nn.Linear(1024, x_dim)
 
+        self.fc4_s = nn.Linear(1024, 1024)
+        self.fc5_s = nn.Linear(1024, 1024)
+        self.fc6_s = nn.Linear(1024, 1)
+
     def forward(self, z):
         x = self.fc1(z)
         x = F.relu(x)
@@ -129,6 +133,22 @@ class FC_for_decoder_and_sigma(nn.Module):
         dim = int(np.sqrt(x_d.shape[-1]))
         x_d = x_d.reshape(-1, 1, dim, dim)
         return x_d
+
+    def sigma(self, z):
+        x = self.fc1(z)
+        x = F.relu(x)
+        x = self.fc2(x)
+        x = F.relu(x)
+        x = self.fc3(x)
+        x = F.relu(x)
+
+        x_s = self.fc4_s(x)
+        x_s = F.relu(x_s)
+        x_s = self.fc5_s(x_s)
+        x_s = F.relu(x_s)
+        x_s = self.fc6_s(x_s)
+        x_s = torch.exp(x_s)
+        return x_s
 
 class FC_for_encoder_and_sigma(nn.Module):
     def __init__(self, z_dim, x_dim):
@@ -219,7 +239,6 @@ class normalized_net(nn.Module):
     def __init__(self, net):
         super().__init__()
         self.net = net
-        self.z_dim = net.out_chan
 
     def forward(self, x):
         x = self.net(x)

@@ -22,6 +22,29 @@ from geometry import (
     curvature_reg,
 )
 import scipy
+
+class neg_log_approx(torch.autograd.Function):
+    """
+    f(x) = -log(1 - x) when x < 0, x + x**2/2 + x**3/3 + x**4/4 when x >= 0
+    """
+    @staticmethod
+    def forward(ctx, input):
+        ctx.save_for_backward(input)
+        index = input < 0
+        output = torch.zeros_like(input)
+        output[index] = -torch.log(1 - input[index])
+        output[~index] = input[~index] + input[~index]**2/2 + input[~index]**3/3 + input[~index]**4/4
+        return output
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        input, = ctx.saved_tensors
+        grad_input = torch.zeros_like(input)
+        index = input < 0
+        grad_input[index] = 1/(1 - input[index])
+        grad_input[~index] = 1 + input[~index] + input[~index]**2 + input[~index]**3
+        return grad_output * grad_input
+    
 class erfi(torch.autograd.Function):
     
     @staticmethod
@@ -158,18 +181,18 @@ class EnergyAE(AE):
         with torch.no_grad():
             x = self.decode(z)
             if apply_noise:
-                    # sigma = self.minimizer.sigma(x)
-                    sigma = torch.exp(self.log_sigma_sq)
-                    x = x + torch.randn_like(x) * sigma # .unsqueeze(1).unsqueeze(2)
+                    sigma = self.decoder.sigma(z)
+                    # sigma = torch.exp(self.log_sigma_sq)
+                    x = x + torch.randn_like(x) * sigma.unsqueeze(1).unsqueeze(2)
         
         return x
     
-    def energy_function(self, x, z):
-        sigma = torch.exp(self.log_sigma_sq)
+    def conditional_energy_function(self, x, z):
         x_star = self.decoder(z).view(-1) # (D)
-        recon_loss = (x - x_star).pow(2).sum() / (2 * (sigma ** 2))
-        latent_energy_loss = (z ** 2).sum() / 2
-        energy = recon_loss + latent_energy_loss
+        D = x_star.shape[0]
+        sigma = self.decoder.sigma(z) 
+        energy = (x - x_star).pow(2).sum() / (2 * (sigma ** 2))
+        energy = energy + D * torch.log(sigma)
         return energy.squeeze()
     
     def half_riemannian_metric(self, z, create_graph=True):
@@ -183,105 +206,54 @@ class EnergyAE(AE):
         z_star = self.minimizer(x)
 
         x = x.view(len(x), -1) # (B, D)
-        sigma = torch.exp(self.log_sigma_sq)
+        sigma = self.decoder.sigma(z_star) # (B, )
 
         bs = x.shape[0]
         D = x.shape[1]
         n = z_star.shape[1]
 
-        # compute energy
-        compute_energy = vmap(self.energy_function, in_dims = (0, 0))
-        energy = compute_energy(x, z_star) # (B, )
+        # compute recon loss, which is conditional energy E(x|x_bar)
+        compute_recon = vmap(self.conditional_energy_function, in_dims = (0, 0))
+        recon_loss = compute_recon(x, z_star) # (B, )
 
-        # gradient of energy
-        compute_grad = vmap(jacrev(self.energy_function, argnums = 1), in_dims = (0, 0))
+        # compute gradient
+        compute_grad = vmap(jacrev(self.conditional_energy_function, argnums = 1), in_dims = (0, 0))
         grad = compute_grad(x, z_star) # (B, n)
 
-        J = jacobian_of_f(self.decoder, z_star, create_graph=True)
-        G = J.permute(0, 2, 1)@J + 1e-3* torch.eye(z_star.shape[1]).to(z_star)
-        U = torch.linalg.cholesky(G, upper=True) # U^T U = G
-        
-        # hessian of energy
-        compute_batch_hessian = vmap(hessian(self.energy_function, argnums = 1), in_dims = (0, 0))
+        # compute hessian
+        compute_batch_hessian = vmap(hessian(self.conditional_energy_function, argnums = 1), in_dims = (0, 0))
         hess = compute_batch_hessian(x, z_star) # (B, n, n)
-        A = torch.linalg.solve(U.permute(0, 2, 1), (torch.linalg.solve(U.permute(0, 2, 1), hess)).permute(0, 2, 1)) # (U^{-1})^THU^{-1} (B, n, n)
-        eigvals_h, Q = torch.linalg.eigh(A) # A = Q \Lambda Q^T
-        eigvals_sh = torch.linalg.eigvalsh(A) 
-        error = torch.norm(eigvals_h - eigvals_sh)
-        # energy_loss
-        energy_loss = energy # (B, )
-
-        # log det loss
-        log_det_loss = torch.logdet(G) / 2 # (B, )
-        log_det_loss[torch.isnan(log_det_loss)] = 0
-        log_det_loss[torch.isinf(log_det_loss)] = 0
-
-
-        # curvature loss
-        s = 0.5
-        radius = s * sigma.detach()
-        a = eigvals_sh.view(-1) # (B*n, )
-        b =  (Q.permute(0, 2, 1) @ torch.linalg.solve(U.permute(0, 2, 1), grad.unsqueeze(2))).squeeze().view(-1) # (B*n, )
-        b = torch.abs(b)
-        mask = a >= 0
-        pos_a = a[mask]
-        pos_b = b[mask]
-        neg_a = a[~mask]
-        neg_b = b[~mask]
-        if len(pos_a) > 0:
-            sqrt_pos_a = torch.sqrt(pos_a)
-            z_start = (pos_b - 2*pos_a*radius)/(2*sqrt_pos_a)
-            z_end = (pos_b + 2*pos_a*radius)/(2*sqrt_pos_a)
-            mean = pos_b/(2*sqrt_pos_a)
-            mask = z_start < 0
-            z_start_neg = z_start[mask]
-            z_start_pos = z_start[~mask]
-            pos_a_neg = pos_a[mask]
-            pos_a_pos = pos_a[~mask]
-            mean_neg = mean[mask]
-            mean_pos = mean[~mask]
-
-            z_end_neg = z_end[mask]
-            z_end_pos = z_end[~mask]
-            if len(z_start_neg) > 0:
-                pos_log_scale_neg =  -torch.log(2*torch.exp(mean_neg**2) - torch.exp(mean_neg**2-z_end_neg ** 2) * erfcx.apply(z_end_neg) - torch.exp(mean_neg**2-z_start_neg ** 2) * erfcx.apply(-z_start_neg)) + torch.log(pos_a_neg)/2
-                pos_log_scale_neg[torch.isnan(pos_log_scale_neg)] = 0
-                pos_log_scale_neg[torch.isinf(pos_log_scale_neg)] = 0
-            else:
-                pos_log_scale_neg = torch.tensor(0.0)
-            if len(z_start_pos) > 0:
-                pos_log_scale_pos = - torch.log(torch.exp(mean_pos**2 - z_start_pos**2)* erfcx.apply(z_start_pos) - torch.exp(mean_pos**2 - z_end_pos ** 2) * erfcx.apply(z_end_pos)) + torch.log(pos_a_pos)/2
-                pos_log_scale_pos[torch.isnan(pos_log_scale_pos)] = 0
-                pos_log_scale_pos[torch.isinf(pos_log_scale_pos)] = 0
-            else:
-                pos_log_scale_pos = torch.tensor(0.0)
-            pos_log_scale = torch.cat([pos_log_scale_neg, pos_log_scale_pos], dim = 0)
-        else:
-            pos_log_scale = torch.tensor(0.0)
-        if len(neg_a) > 0:
-            sqrt_neg_a = torch.sqrt(-neg_a)
-            z_start = (neg_b + 2*neg_a*radius)/(2*sqrt_neg_a)
-            z_end = (neg_b - 2*neg_a*radius)/(2*sqrt_neg_a)
-            mean = neg_b/(2*sqrt_neg_a)
-            neg_log_scale = - torch.log(torch.exp(z_end ** 2 - mean ** 2) * dawson.apply(z_end) - torch.exp(z_start**2 - mean**2) * dawson.apply(z_start)) \
-                + torch.log(-neg_a)/2 - torch.log(torch.tensor(2/np.pi**0.5))
-            neg_log_scale[torch.isnan(neg_log_scale)] = 0
-            neg_log_scale[torch.isinf(neg_log_scale)] = 0
-        else:
-            neg_log_scale = torch.tensor(0.0)
-        if len(pos_a) > 0 and len(neg_a) > 0:
-            scale = torch.cat([pos_log_scale, neg_log_scale], dim = 0)
-        elif len(pos_a) > 0:
-            scale = pos_log_scale
-        else:
-            scale = neg_log_scale
-        curvature_loss = scale.sum()/bs
+        
+        # compute log det and latent energy
+        J = jacobian_of_f(self.decoder, z_star, create_graph=True)
+        G = J.permute(0, 2, 1)@J + 1e-3* torch.eye(n).to(z_star)
+        log_det = torch.logdet(G) / 2
+        log_det[torch.isnan(log_det)] = 0
+        log_det[torch.isinf(log_det)] = 0
+        latent_energy = (z_star ** 2).sum(dim = 1) / 2
+        invariant_energy = log_det + latent_energy
 
         # sigma loss
-        sigma_loss = (D) * torch.log(sigma) # (B, )
+        # sigma_loss = (D) * torch.log(sigma) # (B, )
 
+        # second order loss
+        s = 1.0
+        sigma_detached = sigma #.detach()
+        radius = s * sigma_detached
+        Trace_grad = (- grad.unsqueeze(1) @ torch.linalg.solve(G, grad.unsqueeze(2))).squeeze() # (B, )
+        Trace_hess = vmap(torch.trace)(torch.linalg.solve(G, hess)) # (B, )
 
-        loss = (energy_loss + log_det_loss + sigma_loss + curvature_loss)/D
+        second_order_term = (Trace_grad + Trace_hess) * (radius ** 2) / (2*n+4)
+        second_order_loss = neg_log_approx.apply(second_order_term)
+
+        # constant term
+        constant_term = -n/2 * torch.log(torch.tensor(np.pi)) + D/2 * torch.log(2*torch.tensor(np.pi))\
+              + torch.lgamma(torch.tensor(n/2+1)) - n *torch.log(radius)
+        
+        # geometric regularization to make G numerically stable (condition number = (max_eigenvalue/min_eigenvalue))
+        geometric_loss = relaxed_distortion_measure(self.decoder, z_star, create_graph=True)
+
+        loss = (recon_loss + invariant_energy + constant_term+ second_order_loss+ 1 * geometric_loss)/D #  
         loss = loss.mean()
         loss.backward()
 
@@ -292,19 +264,22 @@ class EnergyAE(AE):
 
         if is_neg:
             return {"loss_neg": loss.item(),
-                    "pre_neg/log_det_loss_neg_": log_det_loss.mean().item(),
-                    "pre_neg/energy_loss_neg_": energy_loss.mean().item(),
+                    "pre_neg/recon_loss_neg_": recon_loss.mean().item(),
+                    "pre_neg/invariant_energy_neg_": invariant_energy.mean().item(),
+                    "pre_neg/log_det_neg_": log_det.mean().item(),
+                   "pre_neg/latent_energy_neg_": latent_energy.mean().item(),
+                    "pre_neg/second_order_loss_neg_": second_order_loss.mean().item(),
+                    "pre_neg/geometric_loss_neg_": geometric_loss.mean().item(),
                     "pre_neg/sigma_neg_": sigma.mean().item()}
         else:
             return {"loss": loss.item(),
-                    "pre/log_det_loss_": log_det_loss.mean().item(),
-                    "pre/energy_loss_": energy_loss.mean().item(),
-                    "pre/cuvature_loss_": curvature_loss.mean().item(),
-                    "pre/sigma_": sigma.mean().item(),
-                    "pre/pos_log_scale_": pos_log_scale.mean().item(),
-                    "pre/neg_log_scale_": neg_log_scale.mean().item(),
-                    "pre/error_": error.item(),
-                    }   
+                    "pre/recon_loss_": recon_loss.mean().item(),
+                    "pre/invariant_energy_": invariant_energy.mean().item(),
+                    "pre/log_det_": log_det.mean().item(),
+                    "pre/latent_energy_": latent_energy.mean().item(),
+                    "pre/second_order_loss_": second_order_loss.mean().item(),
+                    "pre/geometric_loss_": geometric_loss.mean().item(),
+                    "pre/sigma_": sigma.mean().item()}
     
     def pretrain_step(self, x, optimizer_pre, is_neg = False, **kwargs):
 
@@ -411,71 +386,102 @@ class EnergyAE(AE):
     def new_train_step(self, x, neg_x, optimizer, **kwargs):
         optimizer.zero_grad()
         z_star = self.minimizer(x).detach() # (B, n)
-        neg_z_star = self.minimizer(neg_x).detach() # (B, n)
+        z_star_neg = self.minimizer(neg_x).detach() # (B, n)
 
         x = x.view(len(x), -1) # (B, D)
         neg_x = neg_x.view(len(neg_x), -1) # (B, D)
-        sigma = torch.exp(self.log_sigma_sq)
+        sigma = self.minimizer.sigma(x).detach() # (B, )
+        signa_neg = self.minimizer.sigma(neg_x).detach() # (B, )
 
+        bs = x.shape[0]
         D = x.shape[1]
         n = z_star.shape[1]
 
-        # compute energy
-        compute_energy = vmap(self.energy_function, in_dims = (0, 0))
-        energy = compute_energy(x, z_star)
-        neg_energy = compute_energy(neg_x, neg_z_star)
+        # compute recon loss, which is conditional energy E(x|x_bar)
+        compute_recon = vmap(self.conditional_energy_function, in_dims = (0, 0))
+        recon_loss = compute_recon(x, z_star) # (B, )
+        recon_loss_neg = compute_recon(neg_x, z_star_neg)
 
-        # gradient of energy
-        compute_grad = vmap(jacrev(self.energy_function, argnums = 1), in_dims = (0, 0))
-        grad = compute_grad(x, z_star)
-        neg_grad = compute_grad(neg_x, neg_z_star)
+        # compute gradient
+        compute_grad = vmap(jacrev(self.conditional_energy_function, argnums = 1), in_dims = (0, 0))
+        grad = compute_grad(x, z_star) # (B, n)
+        grad_neg = compute_grad(neg_x, z_star_neg)
 
-        # hessian of energy
-        compute_batch_hessian = vmap(hessian(self.energy_function, argnums = 1), in_dims = (0, 0))
-        hess = compute_batch_hessian(x, z_star)
-        neg_hess = compute_batch_hessian(neg_x, neg_z_star)
+        # compute hessian
+        compute_batch_hessian = vmap(hessian(self.conditional_energy_function, argnums = 1), in_dims = (0, 0))
+        hess = compute_batch_hessian(x, z_star) # (B, n, n)
+        hess_neg = compute_batch_hessian(neg_x, z_star_neg)
+        
+        # compute log det and latent energy
+        J = jacobian_of_f(self.decoder, z_star, create_graph=True)
+        J_neg = jacobian_of_f(self.decoder, z_star_neg, create_graph=True)
+        G = J.permute(0, 2, 1)@J + 1e-3* torch.eye(z_star.shape[1]).to(z_star)
+        G_neg = J_neg.permute(0, 2, 1)@J_neg + 1e-3* torch.eye(z_star_neg.shape[1]).to(z_star_neg)
 
-        # energy_loss
-        energy_loss = energy
-        neg_energy_loss = neg_energy
+        log_det = torch.logdet(G) / 2
+        log_det_neg = torch.logdet(G_neg) / 2
+        log_det[torch.isnan(log_det)] = 0
+        log_det[torch.isinf(log_det)] = 0
+        log_det_neg[torch.isnan(log_det_neg)] = 0
+        log_det_neg[torch.isinf(log_det_neg)] = 0
 
-        # log det loss
-        X = hess - grad.unsqueeze(2) @ grad.unsqueeze(1)
-        neg_X = neg_hess - neg_grad.unsqueeze(2) @ neg_grad.unsqueeze(1)
-        log_det_loss = torch.logdet(X) / 2
-        log_det_loss[torch.isnan(log_det_loss)] = 0
-        log_det_loss[torch.isinf(log_det_loss)] = 0
-        neg_log_det_loss = torch.logdet(neg_X) / 2
-        neg_log_det_loss[torch.isnan(neg_log_det_loss)] = 0
-        neg_log_det_loss[torch.isinf(neg_log_det_loss)] = 0
+        latent_energy = (z_star ** 2).sum(dim = 1) / 2
+        latent_energy_neg = (z_star_neg ** 2).sum(dim = 1) / 2
+        invariant_energy = latent_energy + log_det
+        invariant_energy_neg = latent_energy_neg + log_det_neg
 
         # sigma loss
-        sigma_loss = (D) * torch.log(sigma)
-        neg_sigma_loss = (D) * torch.log(sigma)
+        sigma_loss = (D) * torch.log(sigma) # (B, )
+        sigma_loss_neg = (D) * torch.log(signa_neg) # (B, ) 
+
+        # second order loss
+        s = 1.0
+        sigma_detached = sigma #.detach()
+        radius = s * sigma_detached
+        Trace_grad = (- grad.unsqueeze(1) @ torch.linalg.solve(G, grad.unsqueeze(2))).squeeze() # (B, )
+        Trace_hess = vmap(torch.trace)(torch.linalg.solve(G, hess)) # (B, )
+
+        second_order_term = (Trace_grad + Trace_hess) * (radius ** 2) / (2*n+4)
+        second_order_loss = neg_log_approx.apply(second_order_term)
+
+        sigma_detached_neg = signa_neg #.detach()
+        radius_neg = s * sigma_detached_neg
+        Trace_grad_neg = (- grad_neg.unsqueeze(1) @ torch.linalg.solve(G_neg, grad_neg.unsqueeze(2))).squeeze() # (B, )
+        Trace_hess_neg = vmap(torch.trace)(torch.linalg.solve(G_neg, hess_neg)) # (B, )
+
+        second_order_term_neg = (Trace_grad_neg + Trace_hess_neg) * (radius_neg ** 2) / (2*n+4)
+        second_order_loss_neg = neg_log_approx.apply(second_order_term_neg)
 
         # constant term
-        constant_term = (D-n)/2 * torch.log(2 * torch.tensor(np.pi)) + torch.lgamma(torch.tensor(n/2+2))
-
-        pos_e = (energy_loss + log_det_loss + sigma_loss + constant_term)/D
-        neg_e = (neg_energy_loss + neg_log_det_loss + neg_sigma_loss + constant_term)/D
+        constant_term = -n/2 * torch.log(torch.tensor(np.pi)) + D/2 * torch.log(2*torch.tensor(np.pi))\
+              + torch.lgamma(torch.tensor(n/2+1)) - n *torch.log(radius)
+        
+        pos_e = (recon_loss + invariant_energy + sigma_loss + second_order_loss + constant_term)/D
+        neg_e = (recon_loss_neg + invariant_energy_neg + sigma_loss_neg + second_order_loss_neg + constant_term)/D
         loss = pos_e.mean() - neg_e.mean()
-        # reg_loss = pos_e.pow(2).mean() + neg_e.pow(2).mean()
-        # loss = loss + 0.1 * reg_loss
+        reg_loss = pos_e.pow(2).mean() + neg_e.pow(2).mean()
+        loss = loss + 0.1 * reg_loss
+        loss = loss.mean()
         loss.backward()
 
         torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), 0.1)
         torch.nn.utils.clip_grad_norm_(self.minimizer.parameters(), 0.1)
 
         optimizer.step()
+
         return {"loss": loss.item(),
                 'AE/pos_e_': pos_e.mean().item(),
-                "AE/log_det_loss_": log_det_loss.mean().item(),
-                "AE/energy_loss_": energy_loss.mean().item(),
+                "AE/log_det_loss_": log_det.mean().item(),
+                "AE/lantent_energy_": latent_energy.mean().item(),
+                "AE/recon_loss_": recon_loss.mean().item(),
+                "AE/second_order_loss_": second_order_loss.mean().item(),
                 "AE/sigma_": sigma.mean().item(),
-                'AE/neg_e_': neg_e.mean().item(),
-                "AE/neg_log_det_loss_": neg_log_det_loss.mean().item(),
-                "AE/neg_energy_loss_": neg_energy_loss.mean().item(),
-                "AE/neg_sigma_": sigma.mean().item()}
+                'AE_neg/neg_e_': neg_e.mean().item(),
+                "AE_neg/neg_log_det_loss_": log_det_neg.mean().item(),
+                "AE_neg/neg_lantent_energy_": latent_energy_neg.mean().item(),
+                "AE_neg/neg_recon_loss_": recon_loss_neg.mean().item(),
+                "AE_neg/neg_second_order_loss_": second_order_loss_neg.mean().item(),
+                "AE_neg/neg_sigma_": signa_neg.mean().item()}
     
     def train_step(self, x, neg_x, optimizer, **kwargs):
         optimizer.zero_grad()
@@ -716,44 +722,57 @@ class EnergyAE(AE):
         z_star = self.minimizer(x)
 
         x = x.view(len(x), -1) # (B, D)
-        sigma = torch.exp(self.log_sigma_sq)
+        sigma = self.decoder.sigma(z_star) # (B, )
 
+        bs = x.shape[0]
         D = x.shape[1]
         n = z_star.shape[1]
 
-        # compute energy
-        compute_energy = vmap(self.energy_function, in_dims = (0, 0))
-        energy = compute_energy(x, z_star) # (B, )
+        # compute recon loss, which is conditional energy E(x|x_bar)
+        compute_recon = vmap(self.conditional_energy_function, in_dims = (0, 0))
+        recon_loss = compute_recon(x, z_star) # (B, )
 
-        # gradient of energy
-        compute_grad = vmap(jacrev(self.energy_function, argnums = 1), in_dims = (0, 0))
-        grad = compute_grad(x, z_star.detach()) # (B, n)
+        # compute gradient
+        compute_grad = vmap(jacrev(self.conditional_energy_function, argnums = 1), in_dims = (0, 0))
+        grad = compute_grad(x, z_star) # (B, n)
 
-        # hessian of energy
-        compute_batch_hessian = vmap(hessian(self.energy_function, argnums = 1), in_dims = (0, 0))
-        hess = compute_batch_hessian(x, z_star.detach()) # (B, n, n)
-
-        # energy_loss
-        energy_loss = energy # (B, )
-
-        # log det loss
-        X = hess - grad.unsqueeze(2) @ grad.unsqueeze(1)
-        log_det_loss = torch.logdet(X) / 2 # (B, )
-        log_det_loss[torch.isnan(log_det_loss)] = 0
-        log_det_loss[torch.isinf(log_det_loss)] = 0
+        # compute hessian
+        compute_batch_hessian = vmap(hessian(self.conditional_energy_function, argnums = 1), in_dims = (0, 0))
+        hess = compute_batch_hessian(x, z_star) # (B, n, n)
+        
+        # compute log det and latent energy
+        J = jacobian_of_f(self.decoder, z_star, create_graph=True)
+        G = J.permute(0, 2, 1)@J + 1e-3* torch.eye(n).to(z_star)
+        log_det = torch.logdet(G) / 2
+        log_det[torch.isnan(log_det)] = 0
+        log_det[torch.isinf(log_det)] = 0
+        latent_energy = (z_star ** 2).sum(dim = 1) / 2
+        invariant_energy = log_det + latent_energy
 
         # sigma loss
-        sigma_loss = (D) * torch.log(sigma) # (B, )
+        # sigma_loss = (D) * torch.log(sigma) # (B, )
+
+        # second order loss
+        s = 1.0
+        sigma_detached = sigma #.detach()
+        radius = s * sigma_detached
+        Trace_grad = (- grad.unsqueeze(1) @ torch.linalg.solve(G, grad.unsqueeze(2))).squeeze() # (B, )
+        Trace_hess = vmap(torch.trace)(torch.linalg.solve(G, hess)) # (B, )
+
+        second_order_term = (Trace_grad + Trace_hess) * (radius ** 2) / (2*n+4)
+        second_order_loss = neg_log_approx.apply(second_order_term)
 
         # constant term
-        constant_term = (D-n)/2 * torch.log(2 * torch.tensor(np.pi)) + torch.lgamma(torch.tensor(n/2+2))
-
-        neg_log_prob  = (energy_loss + log_det_loss + sigma_loss + constant_term)/D
+        constant_term = -n/2 * torch.log(torch.tensor(np.pi)) + D/2 * torch.log(2*torch.tensor(np.pi))\
+              + torch.lgamma(torch.tensor(n/2+1)) - n *torch.log(radius)
+        
+        neg_log_prob = (recon_loss + invariant_energy + constant_term+ second_order_loss)/D
 
         return {"neg_log_prob": neg_log_prob,
-                'log_det_loss': log_det_loss,
-                'energy_loss': energy_loss,
-                'sigma_loss': sigma_loss}
+                'recon_loss': recon_loss,
+                'invariant_energy': invariant_energy,
+                'second_order_loss': second_order_loss,
+                'sigma': sigma}
     
 
     def visualization_step(self, dl, procedure, **kwargs):
