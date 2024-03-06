@@ -106,7 +106,7 @@ class FC_for_decoder_and_sigma(nn.Module):
         super().__init__()
         self.z_dim = z_dim
         self.x_dim = x_dim
-        
+
         self.fc1 = nn.Linear(z_dim, 1024)
         self.fc2 = nn.Linear(1024, 1024)
         self.fc3 = nn.Linear(1024, 1024)
@@ -188,6 +188,7 @@ class FC_for_encoder_and_sigma(nn.Module):
         x_e = self.fc5_e(x_e)
         x_e = F.relu(x_e)
         x_e = self.fc6_e(x_e)
+        x_e = x_e / torch.norm(x_e, dim=1, keepdim=True)
     
         return x_e
     

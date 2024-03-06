@@ -27,8 +27,6 @@ model:
   #   arch: deconv2
   #   nh: 8
   #   out_activation: sigmoid 
-  energy:
-    n_layers: 2
   # sigma:
   #   arch: conv28
   #   activation: relu
@@ -39,17 +37,10 @@ model:
   #   activation: ['relu', 'relu', 'relu', 'relu', 'relu']
   #   out_activation: 'linear'
   #   out_chan_num: 1
-  sigma:
-    arch: fc_vec
-    l_hidden: [1024] # [256, 256, 256, 256, 256]
-    activation: ['relu']
-    out_activation: 'linear'
   x_dim: 784
   z_dim: 16
-  min_sigma_sq: 1e-3
-  max_sigma_sq: 10
   energy_ae:
-    sigma_sq: 0.15
+    sigma_sq: 0.5
     radius: 1.0
     train_sigma: True
     epsilon: 1e-3
@@ -57,7 +48,7 @@ data:
   training:
     dataset: MNIST
     root: dataset
-    batch_size: 256
+    batch_size: 512
     n_workers: 4
     split: training
     shuffle: True
@@ -65,7 +56,7 @@ data:
   validation:
     dataset: MNIST
     root: dataset
-    batch_size: 256
+    batch_size: 512
     n_workers: 4
     split: validation
     shuffle: False
@@ -73,7 +64,7 @@ data:
   test:
     dataset: MNIST
     root: dataset
-    batch_size: 256
+    batch_size: 512
     n_workers: 4
     split: test
     shuffle: False
@@ -81,7 +72,7 @@ data:
   OOD_validation:
     dataset: MNIST
     root: dataset
-    batch_size: 256
+    batch_size: 512
     n_workers: 4
     split: validation
     shuffle: False
@@ -89,7 +80,7 @@ data:
   OOD_test:
     dataset: MNIST
     root: dataset
-    batch_size: 256
+    batch_size: 512
     n_workers: 4
     split: test
     shuffle: False
@@ -106,10 +97,9 @@ training:
     lr: 1e-4
   optimizer:
     lr_encoder: 1e-4
-    lr_encoder_pre: 1e-4
     lr_decoder: 1e-4
-    lr_energy: 1e-3
-    lr_sigma: 1e-5
+    lr_constant: 1e-3
+    lr_sigma: 1e-3
   print_interval: 200
   val_interval: 200
   visualize_interval: 200
