@@ -86,8 +86,6 @@ def get_ae(**model_cfg):
     x_dim = model_cfg['x_dim']
     z_dim = model_cfg['z_dim']
     arch = model_cfg["arch"]
-    min_sigma_sq = model_cfg["min_sigma_sq"]
-    max_sigma_sq = model_cfg["max_sigma_sq"]
     if arch == "vae":
         encoder = get_net(in_dim=x_dim, out_dim=z_dim * 2, **model_cfg["encoder"])
         decoder = get_net(in_dim=z_dim, out_dim=x_dim, **model_cfg["decoder"])
@@ -99,20 +97,12 @@ def get_ae(**model_cfg):
         decoder = get_net(in_dim=z_dim, out_dim=x_dim, **model_cfg["decoder"])
         model = IRVAE(encoder, IsotropicGaussian(decoder), iso_reg=iso_reg, metric=metric)
     elif arch == "eae":
-        from models.modules import normalized_net, energy_net, sigma_net, new_sigma_net, FC_for_decoder_and_sigma, FC_for_encoder_and_sigma
-        encoder = get_net(in_dim=x_dim, out_dim=z_dim * 2, **model_cfg["encoder"])
-        # minimizer = get_net(in_dim=x_dim, out_dim=z_dim, **model_cfg["encoder"])
-        minimizer = FC_for_encoder_and_sigma(z_dim=z_dim, x_dim=x_dim)
-        # decoder = get_net(in_dim=z_dim, out_dim=x_dim, **model_cfg["decoder"])
+        from models.modules import FC_for_decoder_and_sigma, FC_for_encoder_and_sigma
+        encoder = FC_for_encoder_and_sigma(z_dim=z_dim, x_dim=x_dim)
+
         decoder = FC_for_decoder_and_sigma(z_dim=z_dim, x_dim=x_dim)
-        # decoder_target = copy.deepcopy(decoder)
-        # minimizer_target = copy.deepcopy(minimizer)
-        # sigma = sigma_net(get_net(in_dim=1024, out_dim=1, **model_cfg["sigma"]), minimizer_target, decoder_target, min_sigma_sq, max_sigma_sq)
-        # energy = energy_net(encoder, decoder, model_cfg["encoder"]["nh_mlp"], model_cfg["energy"]["n_layers"])
-        from models.energy_based import EnergyBasedModel
-        # ebm = EnergyBasedModel(energy, **model_cfg["ebm"])
-        ebm = None
-        model = EnergyAE(encoder, decoder, ebm, None, minimizer, **model_cfg["energy_ae"])
+
+        model = EnergyAE(encoder = encoder, decoder = decoder, **model_cfg["energy_ae"])
     return model
 
 def get_model(cfg, *args, version=None, **kwargs):

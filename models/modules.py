@@ -104,6 +104,9 @@ class FC_image(nn.Module):
 class FC_for_decoder_and_sigma(nn.Module):
     def __init__(self, z_dim, x_dim):
         super().__init__()
+        self.z_dim = z_dim
+        self.x_dim = x_dim
+        
         self.fc1 = nn.Linear(z_dim, 1024)
         self.fc2 = nn.Linear(1024, 1024)
         self.fc3 = nn.Linear(1024, 1024)
@@ -153,6 +156,9 @@ class FC_for_decoder_and_sigma(nn.Module):
 class FC_for_encoder_and_sigma(nn.Module):
     def __init__(self, z_dim, x_dim):
         super().__init__()
+        self.z_dim = z_dim
+        self.x_dim = x_dim
+
         self.fc1 = nn.Linear(x_dim, 1024)
         self.fc2 = nn.Linear(1024, 1024)
         self.fc3 = nn.Linear(1024, 1024)

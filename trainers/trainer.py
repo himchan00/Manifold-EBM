@@ -84,21 +84,18 @@ class BaseTrainer:
 
         # model.sigma.decoder = copy.deepcopy(model.decoder)
         if not cfg['fix_decoder']:
-            self.optimizer_pre = optim.Adam([# {'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
+            self.optimizer_pre = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
                                             {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
-                                            # {'params': model.sigma.net.parameters(), 'lr': cfg.optimizer['lr_sigma']},
-                                            # {'params': model.log_sigma_sq, 'lr': cfg.optimizer['lr_sigma']},
-                                            {'params': model.minimizer.parameters(), 'lr':cfg.optimizer['lr_encoder_pre']},
                                             
                             ])
-            self.optimizer_min = optim.Adam([{'params': model.minimizer.parameters(), 'lr':cfg.optimizer['lr_encoder_pre']}]
+            self.optimizer_min = optim.Adam([{'params': model.encoder.parameters(), 'lr':cfg.optimizer['lr_encoder_pre']}]
                                             #  {'params': model.log_sigma_sq, 'lr': cfg.optimizer['lr_sigma']},]
                                             )
             
             if model.train_sigma:
                 optimizer = optim.Adam([#{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_energy']},
                                         {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
-                                        # {'params': model.constant_term, 'lr':cfg.optimizer['lr_energy']},
+                                        {'params': model.constant_term, 'lr':cfg.optimizer['lr_energy']},
                                         # {'params': sigma_param, 'lr':cfg.optimizer['lr_sigma']},
                                         ])
             else:
@@ -137,16 +134,15 @@ class BaseTrainer:
 
                 if model.train_sigma:
                     # neg_x = model.sample(shape = (x.shape[0], 16), device=self.device)
-                    # d_train_p = model.new_pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_min, **kwargs)
-                    # d_train_p_neg = model.new_pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_min, is_neg = True, **kwargs)
-                    d_train_t = model.new_pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, **kwargs)
-                    # d_train_t = model.new_train_step(x.to(self.device), neg_x.to(self.device), optimizer=optimizer, **kwargs)
+                    # d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_min, **kwargs)
+                    # d_train_p_neg = model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_min, is_neg = True, **kwargs)
+                    d_train_t = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, **kwargs)
+                    # d_train_t = model.train_step(x.to(self.device), neg_x.to(self.device), optimizer=optimizer, **kwargs)
                     
 
                 else:
                     d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, **kwargs)
-                # update target network
-                model.decoder_target = copy.deepcopy(model.decoder)
+
                 time_meter.update(time.time() - start_ts)
                 logger.process_iter_train(d_train_t)
                 if i_iter % cfg.print_interval == 0:
@@ -160,8 +156,6 @@ class BaseTrainer:
                         logger.add_val(i_iter, d_train_t)
                         # logger.add_val(i_iter, d_train_p)
                         # logger.add_val(i_iter, d_train_p_neg)
-                        #logger.add_val(i_iter, d_train_reg)
-                        #logger.add_val(i_iter, d_train_reg_neg)
                     else:
                         logger.add_val(i_iter,d_train_p)
 
@@ -195,8 +189,8 @@ class BaseTrainer:
                 i_iter += 1
 
         # torch.save(model.encoder.state_dict(), f"pretrained/encoder_vae_ho_1_{model.sigma_sq}.pth")
-        torch.save(model.decoder.state_dict(), f"pretrained/decoder_ho_1_lr_1e-4_reg_1.0.pth")
-        torch.save(model.minimizer.state_dict(), f"pretrained/minimizer_ho_1_lr_1e-4_reg_1.0.pth")
+        # torch.save(model.decoder.state_dict(), f"pretrained/decoder_ho_1_lr_1e-4_reg_1.0.pth")
+        # torch.save(model.minimizer.state_dict(), f"pretrained/minimizer_ho_1_lr_1e-4_reg_1.0.pth")
         # torch.save(model.sigma.net.state_dict(), f"pretrained/sigma_ho_1_.pth")
         self.save_model(model, logdir, i_iter="last")
         return model, best_val_loss
@@ -217,15 +211,18 @@ class BaseTrainer:
 
     def predict(self, m, dl, device, flatten=False, pretrain = False):
         """run prediction for the whole dataset"""
-        l_result = {"neg_log_prob": [], "recon_loss": [], "invariant_energy": [], "sigma": [], "second_order_loss": []}
+        l_result = {}
         for x, _ in dl:
-            # with torch.no_grad():
-            if flatten:
-                x = x.view(len(x), -1)
-            pred = m.new_neg_log_prob(x.cuda(device), pretrain=pretrain)
+            with torch.no_grad():
+                if flatten:
+                    x = x.view(len(x), -1)
+                pred = m.neg_log_prob(x.cuda(device), eval = True)
 
             for key, val in pred.items():
-                l_result[key].append(val.detach().cpu())
+                if key in l_result:
+                    l_result[key].append(val.detach().cpu())
+                else:
+                    l_result[key] = [val.detach().cpu()]
         for key, val in l_result.items():
             l_result[key] = torch.cat(val)
         return l_result

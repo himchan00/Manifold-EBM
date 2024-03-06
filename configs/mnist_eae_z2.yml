@@ -50,18 +50,9 @@ model:
   max_sigma_sq: 10
   energy_ae:
     sigma_sq: 0.15
-    curvature_reg: 1.0
-    n_eval: 10
+    radius: 1.0
     train_sigma: True
-  ebm:
-    gamma: 0.0
-    temperature: 0.01
-    step_size: 0.001
-    noise_scale: null
-    sample_step: 100
-    buffer_size: 10000
-    replay_ratio: 0.95
-    langevin_clip_grad: Null
+    epsilon: 1e-3
 data:
   training:
     dataset: MNIST
@@ -106,7 +97,7 @@ data:
   
 trainer: base
 training:
-  n_epoch: 300
+  n_epoch: 1500
   n_epoch_pre: 100
   n_epoch_ebm: 30
   fix_decoder: false
