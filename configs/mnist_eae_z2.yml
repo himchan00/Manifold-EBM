@@ -41,7 +41,7 @@ model:
   z_dim: 16
   energy_ae:
     sigma_sq: 0.5
-    radius: 1.0
+    radius: 1.5
     train_sigma: True
     epsilon: 1e-3
 data:

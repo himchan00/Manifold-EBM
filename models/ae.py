@@ -205,7 +205,22 @@ class EnergyAE(nn.Module):
         else:
             bs = z.shape[0]
             return torch.exp(self.log_sigma_sq).repeat(bs)
-        
+    
+    def get_energy(self, x, z):
+        """
+        x : (D), z: (n)
+        """
+        x_star = self.decoder(z).view(-1) # (D)
+        D = x.shape[0]
+        if self.train_sigma:
+            sigma = self.decoder.sigma(z)
+        else:
+            sigma = torch.exp(self.log_sigma_sq)
+        energy = (x - x_star).pow(2).sum() / (2 * (sigma ** 2))
+        energy = energy + D * torch.log(sigma)
+        energy = energy + 0.5 * (z ** 2).sum()
+        return energy.squeeze()
+    
     def conditional_energy_function(self, x, z):
         """
         x : (D), z: (n)
@@ -354,11 +369,11 @@ class EnergyAE(nn.Module):
         D = self.x_dim
         n = self.z_dim
         # compute gradient
-        compute_grad = vmap(jacrev(self.conditional_energy_function, argnums = 1), in_dims = (0, 0))
+        compute_grad = vmap(jacrev(self.get_energy, argnums = 1), in_dims = (0, 0))
         grad = compute_grad(x, z_star_detached) # (B, n)
 
         # compute hessian
-        compute_batch_hessian = vmap(hessian(self.conditional_energy_function, argnums = 1), in_dims = (0, 0))
+        compute_batch_hessian = vmap(hessian(self.get_energy, argnums = 1), in_dims = (0, 0))
         hess = compute_batch_hessian(x, z_star_detached) # (B, n, n)
         # compute recon loss
         recon = self.decoder(z_star).view(len(x), -1) # (B, D)
@@ -366,23 +381,21 @@ class EnergyAE(nn.Module):
         sigma_loss = D * torch.log(sigma) # (B,)
 
         # compute log det and latent energy
-        G, log_det, failed_index = self.get_riemannian_metric(z_star, create_graph=True)
+        G, log_det, failed_index = self.get_riemannian_metric(z_star.detach(), create_graph=True)
         latent_energy = (z_star ** 2).sum(dim = 1) / 2
         invariant_energy = log_det + latent_energy
 
 
         # second order loss
-        if not eval:
-            J = jacobian_of_f(self.decoder, z_star_detached, create_graph=True)
-            G = J.permute(0, 2, 1)@J + self.epsilon* torch.eye(z_star_detached.shape[1]).to(z_star_detached)
+        # if not eval:
+        #     J = jacobian_of_f(self.decoder, z_star_detached, create_graph=True)
+        #     G = J.permute(0, 2, 1)@J + self.epsilon* torch.eye(z_star_detached.shape[1]).to(z_star_detached)
         s = self.radius * sigma.detach() # (B, )
 
-        # Trace_grad = (- grad.unsqueeze(1) @ torch.linalg.solve(G, grad.unsqueeze(2))).squeeze() # (B, )
+        Trace_grad = (- grad.unsqueeze(1) @ torch.linalg.solve(G, grad.unsqueeze(2))).squeeze() # (B, )
         Trace_hess = vmap(torch.trace)(torch.linalg.solve(G, hess)) # (B, )
-
-        second_order_term = Trace_hess * (s ** 2) / (2*n+4) 
+        second_order_term = (Trace_hess+Trace_grad) * (s ** 2) / (2*n+4) 
         second_order_loss = neg_log_approx.apply(second_order_term)
-
         # constant term
         constant_term = -n/2 * torch.log(torch.tensor(np.pi)) + D/2 * torch.log(2*torch.tensor(np.pi))\
               + torch.lgamma(torch.tensor(n/2+1)) - n *torch.log(s) + self.constant_term
