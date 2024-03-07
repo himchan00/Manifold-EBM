@@ -188,7 +188,6 @@ class FC_for_encoder_and_sigma(nn.Module):
         x_e = self.fc5_e(x_e)
         x_e = F.relu(x_e)
         x_e = self.fc6_e(x_e)
-        x_e = x_e / torch.norm(x_e, dim=1, keepdim=True)
     
         return x_e
     

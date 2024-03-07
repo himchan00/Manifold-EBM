@@ -176,7 +176,6 @@ class EnergyAE(nn.Module):
     def sample(self, batch_size, device, apply_noise = True):
 
         z = torch.randn((batch_size, self.z_dim), device=device)
-        z = z/torch.norm(z, dim = 1, keepdim = True)
         # decode
         with torch.no_grad():
             x = self.decoder(z)
@@ -190,13 +189,11 @@ class EnergyAE(nn.Module):
         J = jacobian_of_f(self.decoder, z_star, create_graph=create_graph)
         G = J.permute(0, 2, 1)@J + self.epsilon * torch.eye(z_star.shape[1]).to(z_star)
         log_det = torch.logdet(G) / 2
-        if torch.isnan(log_det).sum() > 0:
-            print("nan occured in log_det")
-            log_det[torch.isnan(log_det)] = 0
-        if torch.isinf(log_det).sum() > 0:
-            print("inf occured in log_det")
-            log_det[torch.isinf(log_det)] = 0
-        return G,log_det
+        failed_index = torch.isnan(log_det) | torch.isinf(log_det)
+        if failed_index.sum() > 0:
+            print("nan or inf occured in log_det")
+            log_det[failed_index] = 0
+        return G,log_det, failed_index
     
     def get_sigma(self, z):
         """
@@ -356,58 +353,34 @@ class EnergyAE(nn.Module):
         bs = x.shape[0]
         D = self.x_dim
         n = self.z_dim
-
-        X = torch.randn(bs, n, n).to(z_star)
-        X[:, :, 0] = z_star_detached
-        Q, _ = torch.linalg.qr(X)
-        Q = Q[:, :, 1:] # (B, n, n-1)
-        A = Q @ Q.permute(0, 2, 1) @ torch.linalg.pinv(Q.permute(0, 2, 1)) # (B, n, n-1)
-
         # compute gradient
         compute_grad = vmap(jacrev(self.conditional_energy_function, argnums = 1), in_dims = (0, 0))
         grad = compute_grad(x, z_star_detached) # (B, n)
-        grad = (A.permute(0, 2, 1)@grad.unsqueeze(2)).squeeze() # (B, n-1)
 
         # compute hessian
         compute_batch_hessian = vmap(hessian(self.conditional_energy_function, argnums = 1), in_dims = (0, 0))
         hess = compute_batch_hessian(x, z_star_detached) # (B, n, n)
-        hess = A.permute(0, 2, 1)@hess@A # (B, n-1, n-1)
         # compute recon loss
         recon = self.decoder(z_star).view(len(x), -1) # (B, D)
         recon_loss = ((recon - x) ** 2).sum(dim = 1) / (2 * (sigma ** 2)) # (B,)
         sigma_loss = D * torch.log(sigma) # (B,)
 
         # compute log det and latent energy
-        # G, log_det = self.get_riemannian_metric(z_star, create_graph=True)
-        J = jacobian_of_f(self.decoder, z_star, create_graph=True)
-        JA = J @ A
-        G = JA.permute(0, 2, 1)@JA 
-        G = (G.permute(0, 2, 1) + G)/2 + self.epsilon* torch.eye(z_star_detached.shape[1]-1).to(z_star_detached)
-        log_det = torch.logdet(G) / 2
-        if torch.isnan(log_det).sum() > 0:
-            print("nan occured in log_det")
-            log_det[torch.isnan(log_det)] = 0
-        if torch.isinf(log_det).sum() > 0:
-            print("inf occured in log_det")
-            log_det[torch.isinf(log_det)] = 0
-        #latent_energy = (z_star ** 2).sum(dim = 1) / 2
-        invariant_energy = log_det# + latent_energy
+        G, log_det, failed_index = self.get_riemannian_metric(z_star, create_graph=True)
+        latent_energy = (z_star ** 2).sum(dim = 1) / 2
+        invariant_energy = log_det + latent_energy
 
 
         # second order loss
         if not eval:
-            # J = jacobian_of_f(self.decoder, z_star_detached, create_graph=True)
-            # G = J.permute(0, 2, 1)@J + 1e-3* torch.eye(z_star_detached.shape[1]).to(z_star_detached)
             J = jacobian_of_f(self.decoder, z_star_detached, create_graph=True)
-            JA = J @ A
-            G = JA.permute(0, 2, 1)@JA 
-            G = (G.permute(0, 2, 1) + G)/2 + self.epsilon* torch.eye(z_star_detached.shape[1]-1).to(z_star_detached)
+            G = J.permute(0, 2, 1)@J + self.epsilon* torch.eye(z_star_detached.shape[1]).to(z_star_detached)
         s = self.radius * sigma.detach() # (B, )
 
         # Trace_grad = (- grad.unsqueeze(1) @ torch.linalg.solve(G, grad.unsqueeze(2))).squeeze() # (B, )
         Trace_hess = vmap(torch.trace)(torch.linalg.solve(G, hess)) # (B, )
 
-        second_order_term = Trace_hess * (s ** 2) / (2*n+2) 
+        second_order_term = Trace_hess * (s ** 2) / (2*n+4) 
         second_order_loss = neg_log_approx.apply(second_order_term)
 
         # constant term
@@ -415,10 +388,11 @@ class EnergyAE(nn.Module):
               + torch.lgamma(torch.tensor(n/2+1)) - n *torch.log(s) + self.constant_term
         
         neg_log_prob = (recon_loss + sigma_loss + invariant_energy + second_order_loss + constant_term)/D
+        neg_log_prob[failed_index] = 0
 
         d_return = {"neg_log_prob": neg_log_prob,
                     "recon_loss": recon_loss,
-                   # "latent_energy": latent_energy,
+                   "latent_energy": latent_energy,
                     "log_det": log_det,
                     "second_order_loss": second_order_loss,
                     "sigma": sigma}
