@@ -40,10 +40,11 @@ model:
   x_dim: 784
   z_dim: 16
   energy_ae:
-    sigma_sq: 0.5
-    radius: 1.5
-    train_sigma: True
+    sigma_sq: 0.1
+    radius: 1.0
+    train_sigma: false
     epsilon: 1e-3
+    gamma: 1.0
 data:
   training:
     dataset: MNIST
@@ -88,7 +89,7 @@ data:
   
 trainer: base
 training:
-  n_epoch: 1500
+  n_epoch: 1000
   n_epoch_pre: 100
   n_epoch_ebm: 30
   fix_decoder: false

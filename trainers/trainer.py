@@ -52,11 +52,11 @@ class BaseTrainer:
                 model.train()
                 start_ts = time.time()
 
-                # neg_x = model.sample(shape = (x.shape[0], 16), device=self.device)
+                # neg_x = model.sample(batch_size = x.shape[0], device=self.device)
                 # d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_min, **kwargs)
                 # d_train_p_neg = model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_min, is_neg = True, **kwargs)
                 d_train_t = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, **kwargs)
-                # d_train_t = model.train_step(x.to(self.device), neg_x.to(self.device), optimizer=optimizer, **kwargs)
+                # d_train_t = model.train_step(x.to(self.device), neg_x.to(self.device), optimizer=self.optimizer, **kwargs)
                     
 
                 time_meter.update(time.time() - start_ts)
@@ -69,6 +69,8 @@ class BaseTrainer:
                     time_meter.reset()
                     logger.add_val(i_iter, d_train)
                     logger.add_val(i_iter, d_train_t)
+                    # logger.add_val(i_iter, d_train_p)
+                    # logger.add_val(i_iter, d_train_p_neg)
 
 
                 model.eval()
