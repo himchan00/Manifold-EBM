@@ -97,11 +97,14 @@ def get_ae(**model_cfg):
         decoder = get_net(in_dim=z_dim, out_dim=x_dim, **model_cfg["decoder"])
         model = IRVAE(encoder, IsotropicGaussian(decoder), iso_reg=iso_reg, metric=metric)
     elif arch == "eae":
-        from models.modules import FC_for_decoder_and_sigma, FC_for_encoder_and_sigma
+        from models.modules import FC_for_decoder_and_sigma, FC_for_encoder_and_sigma, normalized_net
         encoder = FC_for_encoder_and_sigma(z_dim=z_dim, x_dim=x_dim)
 
         decoder = FC_for_decoder_and_sigma(z_dim=z_dim, x_dim=x_dim)
-
+        # encoder = get_net(in_dim=x_dim, out_dim=z_dim, **model_cfg["encoder"])
+        # decoder = get_net(in_dim=z_dim, out_dim=x_dim, **model_cfg["decoder"])
+        if model_cfg["energy_ae"]["normalize"]:
+            encoder = normalized_net(encoder)
         model = EnergyAE(encoder = encoder, decoder = decoder, **model_cfg["energy_ae"])
     return model
 

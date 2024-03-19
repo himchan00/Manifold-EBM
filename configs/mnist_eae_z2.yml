@@ -4,13 +4,13 @@ logger:
   endwith: ['@']
 model:
   arch: eae 
-  encoder:
-    arch: fc_image
-    l_hidden:  [1024, 1024, 1024, 1024,1024]
-    activation: ['relu', 'relu', 'relu', 'relu', 'relu']
-    out_activation: 'linear'
-    img_size: [1, 28, 28]
-    out_chan_num: 1
+  # encoder:
+  #   arch: fc_image
+  #   l_hidden:  [1024, 1024, 1024, 1024,1024]
+  #   activation: ['relu', 'relu', 'relu', 'relu', 'relu']
+  #   out_activation: 'linear'
+  #   img_size: [1, 28, 28]
+  #   out_chan_num: 1
   # decoder:
   #   arch: fc_image
   #   l_hidden:  [1024, 1024, 1024, 1024,]
@@ -40,9 +40,9 @@ model:
   x_dim: 784
   z_dim: 16
   energy_ae:
-    sigma_sq: 0.1
-    radius: 1.0
-    train_sigma: false
+    sigma_sq: 0.5
+    normalize: False
+    train_sigma: true
     epsilon: 1e-3
     gamma: 1.0
 data:

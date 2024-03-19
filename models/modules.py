@@ -119,9 +119,6 @@ class FC_for_decoder_and_sigma(nn.Module):
         self.fc5_s = nn.Linear(1024, 1024)
         self.fc6_s = nn.Linear(1024, 1)
 
-        self.sigma_min = torch.tensor(1e-2)
-        self.sigma_max = torch.tensor(2e-1)
-
     def forward(self, z):
         x = self.fc1(z)
         x = F.relu(x)
@@ -153,8 +150,7 @@ class FC_for_decoder_and_sigma(nn.Module):
         x_s = self.fc5_s(x_s)
         x_s = F.relu(x_s)
         x_s = self.fc6_s(x_s)
-        x_s = torch.sigmoid(x_s)
-        x_s = torch.exp(torch.log(self.sigma_min) + (torch.log(self.sigma_max) - torch.log(self.sigma_min)) * x_s)
+        x_s = torch.exp(x_s)
         return x_s
 
 class FC_for_encoder_and_sigma(nn.Module):

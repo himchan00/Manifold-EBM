@@ -15,6 +15,7 @@ from geometry import (
     get_flattening_scores,
     get_log_det_jacobian,
     jacobian_of_f,
+    spherical_jacobian_of_f,
     relaxed_distortion_measure,
     get_log_det_jacobian_new,
     get_projection_coord_rep,
@@ -161,23 +162,26 @@ class EnergyAE(nn.Module):
     def __init__(
         self, encoder, decoder, sigma_sq=1e-4,
         radius = 1.0, train_sigma = True, epsilon = 1e-3,
-        gamma = 1.0
+        gamma = 1.0, normalize = False
     ):
         super(EnergyAE, self).__init__()
         self.encoder = encoder
         self.decoder = decoder
-        self.z_dim = self.encoder.z_dim
-        self.x_dim = self.encoder.x_dim
+        self.z_dim = 16
+        self.x_dim = 784
         self.radius = radius
         self.train_sigma = train_sigma
         self.epsilon = epsilon
         self.gamma = gamma
+        self.normalize = normalize
         self.register_parameter("log_sigma_sq", nn.Parameter(torch.log(sigma_sq * torch.ones(1))))
         self.register_parameter("constant_term", nn.Parameter(torch.tensor(0.0)))
 
     def sample(self, batch_size, device, apply_noise = True):
 
         z = torch.randn((batch_size, self.z_dim), device=device)
+        if self.normalize:
+            z = z / z.norm(dim=1, keepdim=True)
         # decode
         with torch.no_grad():
             x = self.decoder(z)
@@ -187,15 +191,31 @@ class EnergyAE(nn.Module):
         
         return x
     
-    def get_riemannian_metric(self, z_star, create_graph = True):
-        J = jacobian_of_f(self.decoder, z_star, create_graph=create_graph)
-        G = J.permute(0, 2, 1)@J + self.epsilon * torch.eye(z_star.shape[1]).to(z_star)
-        log_det = torch.logdet(G) / 2
-        failed_index = torch.isnan(log_det) | torch.isinf(log_det)
-        if failed_index.sum() > 0:
-            print("nan or inf occured in log_det")
-            log_det[failed_index] = 0
-        return G,log_det, failed_index
+    def scaled_displacement(self, z, x):
+        """
+        calculate the scaled displacement, d = (x - f(z))/sigma(z)
+        x : (B, D)
+        z : (B, n)
+        returns d : (B, D)
+        """
+        x_star = self.decoder(z).view(len(x), -1) # (B, D)
+        sigma = self.get_sigma(z) # (B,)
+        return (x - x_star) / sigma.unsqueeze(1)
+
+    def function_for_hessian(self, z, x):
+        """
+        caculate d.detach().T @ d + D * log(sigma)
+        x : (D)
+        z : (n)
+        returns (,)
+        """
+        x = x.unsqueeze(0) # (1, D)
+        z = z.unsqueeze(0) # (1, n)
+        d = self.scaled_displacement(z, x) # (1, D)
+        d_detached = d.detach() # (1, D)
+        sigma = self.get_sigma(z) # (1,)
+        D = x.shape[1]
+        return (d_detached @ d.T + D * torch.log(sigma)).squeeze()
     
     def get_sigma(self, z):
         """
@@ -290,55 +310,32 @@ class EnergyAE(nn.Module):
         bs = x.shape[0]
         D = self.x_dim
         n = self.z_dim
-        # compute gradient
-        # compute_grad = vmap(jacrev(self.get_energy, argnums = 1), in_dims = (0, 0))
-        # grad = compute_grad(x, z_star_detached) # (B, n)
-
-        # compute hessian
-        compute_batch_hessian = vmap(hessian(self.get_energy, argnums = 1), in_dims = (0, 0))
-        hess = compute_batch_hessian(x, z_star) # (B, n, n)
         # compute recon loss
         recon = self.decoder(z_star).view(len(x), -1) # (B, D)
         recon_loss = ((recon - x) ** 2).sum(dim = 1) / (2 * (sigma ** 2)) # (B,)
         sigma_loss = D * torch.log(sigma) # (B,)
 
         # compute log det and latent energy
-        J = jacobian_of_f(self.decoder, z_star, create_graph=True)
-        precision = J.permute(0, 2, 1)@J/(sigma**2).unsqueeze(1).unsqueeze(2) + torch.eye(z_star_detached.shape[1]).to(z_star_detached)
-        hess = hess - precision
-        log_det = torch.logdet(precision) / 2
-        # G, log_det, failed_index = self.get_riemannian_metric(z_star, create_graph=True)
-        latent_energy = (z_star ** 2).sum(dim = 1) / 2
-        invariant_energy = log_det + latent_energy
+        if self.normalize:
+            J = spherical_jacobian_of_f(partial(self.scaled_displacement, x = x.repeat(n-1, 1)), z_star_detached, create_graph=True)
+            G = J.permute(0, 2, 1)@J + self.epsilon* torch.eye(n-1).to(z_star_detached)
+            latent_energy = torch.zeros(bs).to(z_star_detached)       
+        else:
+            J = jacobian_of_f(partial(self.scaled_displacement, x = x.repeat(n, 1)), z_star_detached, create_graph=True)
+            G = J.permute(0, 2, 1)@J + torch.eye(n).to(z_star_detached)
+            latent_energy = (z_star ** 2).sum(dim = 1) / 2
 
-
-        # second order loss
-        # if not eval:
-        #     J = jacobian_of_f(self.decoder, z_star_detached, create_graph=True)
-        #     G = J.permute(0, 2, 1)@J + self.epsilon* torch.eye(z_star_detached.shape[1]).to(z_star_detached)
-        # s = self.radius * sigma.detach() # (B, )
-        # s_repeat = s.repeat(n, 1).permute(1, 0) # (B, n)
-
-        # # Trace_grad = (- grad.unsqueeze(1) @ torch.linalg.solve(G, grad.unsqueeze(2))).squeeze() # (B, )
-        Trace_hess = vmap(torch.trace)(torch.linalg.solve(precision, hess)) # (B, )
-        second_order_term = Trace_hess/2
-        second_order_loss = neg_log_approx.apply(second_order_term)
-        # A = torch.linalg.solve(G, hess)
-        # eig_vals = torch.linalg.eigvalsh(A) # (B, n)
-        # dummy = torch.ones_like(eig_vals) * 1e-8
-        # eig_vals = torch.where(eig_vals > 1e-8, eig_vals, dummy)
-        # int_range = s_repeat * (eig_vals /2) ** 0.5
-        # dummy = torch.ones_like(int_range) * 1.0
-        # int_range = torch.where(int_range <= 1.0, int_range, dummy)
-        # second_order_term = (2*torch.tensor(np.pi)/eig_vals)**(0.5) * torch.special.erf(int_range) # (B, n)
-        # # second_order_term = (Trace_hess) * (s ** 2) / (2*n+4) 
-        # # second_order_loss = neg_log_approx.apply(second_order_term)
-        # second_order_loss = -torch.log(second_order_term).sum(dim = 1)
-        # constant term
-        # constant_term = -n/2 * torch.log(torch.tensor(np.pi)) + D/2 * torch.log(2*torch.tensor(np.pi))\
-        #       + torch.lgamma(torch.tensor(n/2+1)) - n *torch.log(s) + self.constant_term
+        log_det = torch.logdet(G) / 2 
         
-        neg_log_prob = (recon_loss + sigma_loss + second_order_loss + invariant_energy )/D #   ++ constant_term+ second_order_loss
+        
+        # compute hessian
+        compute_batch_hessian = vmap(hessian(self.function_for_hessian, argnums = 0), in_dims = (0, 0))
+        hess = compute_batch_hessian(z_star_detached, x) # (B, n, n)
+
+        # compute second order loss
+        Trace_hess = vmap(torch.trace)(torch.linalg.solve(G, hess)) # (B, )
+        second_order_loss = neg_log_approx.apply(Trace_hess/2)
+        neg_log_prob = (recon_loss + sigma_loss + log_det + latent_energy + second_order_loss)/D #   ++ constant_term+ second_order_loss+ second_order_loss + invariant_energy 
         # neg_log_prob[failed_index] = 0
 
         d_return = {"neg_log_prob": neg_log_prob,

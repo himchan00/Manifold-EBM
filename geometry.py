@@ -48,6 +48,22 @@ def jacobian_of_f(f, z, create_graph=True):
     )
     return out 
 
+def spherical_jacobian_of_f(f, z, create_graph=True):
+    batch_size, z_dim = z.size()
+    A = torch.randn(batch_size, z_dim, z_dim).to(z)
+    A[:, :, 0] = z.detach()
+    Q, _ = torch.linalg.qr(A)
+    Q = Q[:, :, 1:]
+    Q = Q.permute(0, 2, 1) # (bs, z_dim-1, z_dim)
+    v = Q.reshape(-1, z_dim)
+    z = z.repeat(1, z_dim-1).view(-1, z_dim)
+    out = (
+        torch.autograd.functional.jvp(
+            f, z, v=v, create_graph=create_graph
+        )[1].view(batch_size, z_dim-1, -1).permute(0, 2, 1)
+    )
+    return out
+
 def relaxed_volume_preserving_measure(func, z, eta=0.2, create_graph=True):
     bs = len(z)
     z_perm = z[torch.randperm(bs)]
