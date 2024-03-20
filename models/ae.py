@@ -160,22 +160,24 @@ class AE(nn.Module):
 
 class EnergyAE(nn.Module):
     def __init__(
-        self, encoder, decoder, sigma_sq=1e-4,
-        radius = 1.0, train_sigma = True, epsilon = 1e-3,
+        self, encoder, decoder, sigma, sigma_sq=1e-4,
+        radius = 1.0, sigma_train = "decoder", epsilon = 1e-3,
         gamma = 1.0, normalize = False
     ):
         super(EnergyAE, self).__init__()
         self.encoder = encoder
         self.decoder = decoder
+        self.sigma = sigma
         self.z_dim = 16
         self.x_dim = 784
         self.radius = radius
-        self.train_sigma = train_sigma
+        self.sigma_train = sigma_train # choices : "decoder", "encoder", "independent"
         self.epsilon = epsilon
         self.gamma = gamma
         self.normalize = normalize
         self.register_parameter("log_sigma_sq", nn.Parameter(torch.log(sigma_sq * torch.ones(1))))
         self.register_parameter("constant_term", nn.Parameter(torch.tensor(0.0)))
+        self.baseline = torch.tensor(0.0)
 
     def sample(self, batch_size, device, apply_noise = True):
 
@@ -222,11 +224,19 @@ class EnergyAE(nn.Module):
         z : (B, n)
         returns sigma of shape (B,)
         """
-        if self.train_sigma:
+        if self.sigma_train == "decoder":
             return self.decoder.sigma(z).squeeze(-1)
-        else:
+        elif self.sigma_train == "encoder":
+            x_star = self.decoder(z).view(len(z), -1) # (B, D)
+            return self.encoder.sigma(x_star).squeeze(-1)
+        elif self.sigma_train == 'sigma':
+            x_star = self.decoder(z).view(len(z), -1) # (B, D)
+            return self.sigma(x_star).squeeze(-1)
+        elif self.sigma_train == "independent":
             bs = z.shape[0]
             return torch.exp(self.log_sigma_sq).repeat(bs)
+        else:
+            raise ValueError("sigma_train should be one of 'decoder', 'encoder', 'sigma', independent'")
     
     def get_energy(self, x, z):
         """
@@ -274,7 +284,7 @@ class EnergyAE(nn.Module):
 
         for key, values in d_train.items():
             if is_neg:
-                d_logging["pretrain/neg_" + key + "_"] = values.mean().item()
+                d_logging["neg_pretrain/" + key + "_"] = values.mean().item()
             else:
                 d_logging["pretrain/" + key + "_"] = values.mean().item()
         return d_logging
@@ -288,7 +298,8 @@ class EnergyAE(nn.Module):
         neg_e = d_train_neg["neg_log_prob"]
         loss = pos_e - neg_e
         baseline = (pos_e.mean() + neg_e.mean()).detach() / 2
-        reg_loss = (pos_e-baseline).pow(2).mean() + (neg_e-baseline).pow(2).mean()
+        self.baseline = 0.995 * self.baseline + 0.005 * baseline
+        reg_loss = (pos_e-self.baseline).pow(2).mean() + (neg_e-self.baseline).pow(2).mean()
         loss = loss.mean()
         loss = loss + self.gamma * reg_loss
         loss.backward()
@@ -298,9 +309,39 @@ class EnergyAE(nn.Module):
 
         optimizer.step()
 
-        d_logging = {"loss" : loss.item()}
+        d_logging = {"loss" : loss.item(),
+                     "train/pos_e_": pos_e.mean().item(),
+                     "train/neg_e_": neg_e.mean().item(),
+                     "train/baseline_": self.baseline.item(),}
         return d_logging
     
+    def encoder_train_step(self, x, optimizer, is_neg = False, **kwargs):
+        optimizer.zero_grad()
+        z_star = self.encoder(x)
+        x = x.view(len(x), -1) # (B, D)
+        sigma = self.get_sigma(z_star) # (B,)
+        recon = self.decoder(z_star).view(len(x), -1) # (B, D)
+        recon_loss = ((recon - x) ** 2).sum(dim = 1) / (2 * (sigma ** 2)) # (B,)
+        sigma_loss = self.x_dim * torch.log(sigma) # (B,)
+        if self.normalize:
+            latent_energy = torch.zeros(len(x)).to(z_star)
+        else:
+            latent_energy = (z_star ** 2).sum(dim = 1) / 2
+        loss = (recon_loss + sigma_loss + latent_energy)/self.x_dim
+        loss = loss.mean()
+        loss.backward()
+        optimizer.step()
+        if is_neg:
+            d_logging = {"loss" : loss.item(),
+                        "encoder_neg/recon_loss_": recon_loss.mean().item(),
+                        "encoder_neg/sigma_loss_": sigma_loss.mean().item(),
+                        "encoder_neg/latent_energy_": latent_energy.mean().item()}
+        else:
+            d_logging = {"loss" : loss.item(),
+                        "encoder/recon_loss_": recon_loss.mean().item(),
+                        "encoder/sigma_loss_": sigma_loss.mean().item(),
+                        "encoder/latent_energy_": latent_energy.mean().item()}
+        return d_logging
     def neg_log_prob(self, x, eval = False):
         z_star = self.encoder(x)
         z_star_detached = z_star.detach()
@@ -322,7 +363,7 @@ class EnergyAE(nn.Module):
             latent_energy = torch.zeros(bs).to(z_star_detached)       
         else:
             J = jacobian_of_f(partial(self.scaled_displacement, x = x.repeat(n, 1)), z_star_detached, create_graph=True)
-            G = J.permute(0, 2, 1)@J + torch.eye(n).to(z_star_detached)
+            G = J.permute(0, 2, 1)@J + self.epsilon * torch.eye(n).to(z_star_detached)
             latent_energy = (z_star ** 2).sum(dim = 1) / 2
 
         log_det = torch.logdet(G) / 2 
@@ -331,11 +372,18 @@ class EnergyAE(nn.Module):
         # compute hessian
         compute_batch_hessian = vmap(hessian(self.function_for_hessian, argnums = 0), in_dims = (0, 0))
         hess = compute_batch_hessian(z_star_detached, x) # (B, n, n)
+        if not self.normalize:
+            hess = hess + torch.eye(n).to(z_star_detached).repeat(bs, 1, 1)
 
         # compute second order loss
         Trace_hess = vmap(torch.trace)(torch.linalg.solve(G, hess)) # (B, )
-        second_order_loss = neg_log_approx.apply(Trace_hess/2)
-        neg_log_prob = (recon_loss + sigma_loss + log_det + latent_energy + second_order_loss)/D #   ++ constant_term+ second_order_loss+ second_order_loss + invariant_energy 
+        # second_order_loss = neg_log_approx.apply(Trace_hess/2)
+        second_order_loss = Trace_hess/2
+        reg_loss = relaxed_distortion_measure(self.decoder, z_star_detached, create_graph=True)
+        if not eval:
+            neg_log_prob = (recon_loss + sigma_loss + log_det + latent_energy + second_order_loss + 10*reg_loss)/D # 
+        else:
+            neg_log_prob = (recon_loss + sigma_loss + log_det + latent_energy + second_order_loss)/D
         # neg_log_prob[failed_index] = 0
 
         d_return = {"neg_log_prob": neg_log_prob,
@@ -345,8 +393,8 @@ class EnergyAE(nn.Module):
                     "second_order_loss": second_order_loss,
                     "sigma": sigma}
         
-        # if not eval:
-        #     d_return["grad"] = grad
+        if not eval:
+            d_return["reg_loss"] = reg_loss
         return d_return
     
 

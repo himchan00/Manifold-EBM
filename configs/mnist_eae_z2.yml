@@ -4,13 +4,13 @@ logger:
   endwith: ['@']
 model:
   arch: eae 
-  # encoder:
-  #   arch: fc_image
-  #   l_hidden:  [1024, 1024, 1024, 1024,1024]
-  #   activation: ['relu', 'relu', 'relu', 'relu', 'relu']
-  #   out_activation: 'linear'
-  #   img_size: [1, 28, 28]
-  #   out_chan_num: 1
+  sigma:
+    arch: fc_vec
+    l_hidden:  [1024, 1024, 1024, 1024]
+    activation: ['relu', 'relu', 'relu', 'relu']
+    out_activation: 'sigmoid'
+    img_size: [1, 28, 28]
+    out_chan_num: 1
   # decoder:
   #   arch: fc_image
   #   l_hidden:  [1024, 1024, 1024, 1024,]
@@ -42,8 +42,8 @@ model:
   energy_ae:
     sigma_sq: 0.5
     normalize: False
-    train_sigma: true
-    epsilon: 1e-3
+    sigma_train: 'sigma'
+    epsilon: 1e-4
     gamma: 1.0
 data:
   training:
@@ -89,7 +89,7 @@ data:
   
 trainer: base
 training:
-  n_epoch: 1000
+  n_epoch: 500
   n_epoch_pre: 100
   n_epoch_ebm: 30
   fix_decoder: false
@@ -100,7 +100,7 @@ training:
     lr_encoder: 1e-4
     lr_decoder: 1e-4
     lr_constant: 1e-3
-    lr_sigma: 1e-3
+    lr_sigma: 1e-4
   print_interval: 200
   val_interval: 200
   visualize_interval: 200

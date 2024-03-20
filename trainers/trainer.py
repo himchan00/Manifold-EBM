@@ -24,21 +24,22 @@ class BaseTrainer:
         i_iter = 0
         best_val_loss = np.inf
 
-        if model.train_sigma:
+        if model.sigma_train == "encoder" or "decoder":
             self.optimizer_pre = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
                                             {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
                                             ])
-            self.optimizer = optim.Adam([{'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
-                                {'params': model.constant_term, 'lr':cfg.optimizer['lr_constant']},])
+        elif model.sigma_train == "sigma":
+            self.optimizer_pre = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
+                                             {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
+                                             {'params': model.sigma.parameters(), 'lr': cfg.optimizer['lr_sigma']}
+                                             ])
         else:
             self.optimizer_pre = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
                                              {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
                                              {'params': model.log_sigma_sq, 'lr': cfg.optimizer['lr_sigma']}
                                              ])
-            self.optimizer = optim.Adam([{'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
-                                {'params': model.constant_term, 'lr':cfg.optimizer['lr_constant']},
-                                {'params': model.log_sigma_sq, 'lr': cfg.optimizer['lr_sigma']}])
         
+        self.optimizer = optim.Adam([{'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']}])
         self.optimizer_min = optim.Adam([{'params': model.encoder.parameters(), 'lr':cfg.optimizer['lr_encoder']}])
 
 
@@ -54,7 +55,7 @@ class BaseTrainer:
 
                 # neg_x = model.sample(batch_size = x.shape[0], device=self.device)
                 # d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_min, **kwargs)
-                # d_train_p_neg = model.pretrain_step(neg_x.to(self.device), optimizer_pre=self.optimizer_min, is_neg = True, **kwargs)
+                # d_train_p_neg = model.encoder_train_step(neg_x.to(self.device), optimizer=self.optimizer_min, is_neg = True, **kwargs)
                 d_train_t = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, **kwargs)
                 # d_train_t = model.train_step(x.to(self.device), neg_x.to(self.device), optimizer=self.optimizer, **kwargs)
                     
@@ -100,10 +101,8 @@ class BaseTrainer:
                     logger.add_val(i_iter, d_val)
                 i_iter += 1
 
-        # torch.save(model.encoder.state_dict(), f"pretrained/encoder_vae_ho_1_{model.sigma_sq}.pth")
-        # torch.save(model.decoder.state_dict(), f"pretrained/decoder_ho_1_lr_1e-4_reg_1.0.pth")
-        # torch.save(model.minimizer.state_dict(), f"pretrained/minimizer_ho_1_lr_1e-4_reg_1.0.pth")
-        # torch.save(model.sigma.net.state_dict(), f"pretrained/sigma_ho_1_.pth")
+        torch.save(model.encoder.state_dict(), f"pretrained/encoder_ho_1.pth")
+        torch.save(model.decoder.state_dict(), f"pretrained/decoder_ho_1.pth")
         self.save_model(model, logdir, i_iter="last")
         return model, best_val_loss
 
