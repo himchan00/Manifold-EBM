@@ -54,6 +54,8 @@ class FC_vec(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+    def sigma(self, x):
+        return self.net(x)
     
 class FC_image(nn.Module):
     def __init__(
@@ -150,7 +152,7 @@ class FC_for_decoder_and_sigma(nn.Module):
         x_s = self.fc5_s(x_s)
         x_s = F.relu(x_s)
         x_s = self.fc6_s(x_s)
-        x_s = torch.exp(x_s)
+        # x_s = torch.exp(x_s)
         return x_s
 
 class FC_for_encoder_and_sigma(nn.Module):
@@ -208,7 +210,7 @@ class FC_for_encoder_and_sigma(nn.Module):
         x_s = self.fc6_s(x_s)
         # x_s = torch.sigmoid(x_s)
         # x_s = torch.exp(torch.log(self.sig_min) + (torch.log(self.sig_max) - torch.log(self.sig_min)) * x_s)
-        x_s = torch.exp(x_s)
+        # x_s = torch.exp(x_s)
         return x_s
 
 class IsotropicGaussian(nn.Module):
@@ -261,7 +263,10 @@ class sigma_net_normalizer(nn.Module):
         
     def forward(self, x):
         x = self.net(x)
-
+        return x
+    def sigma(self, x):
+        x = self.net.sigma(x)
+        x = torch.sigmoid(x)
         x = torch.exp(self.min + (self.max - self.min) * x)
         return x
 """

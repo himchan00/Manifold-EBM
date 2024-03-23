@@ -103,6 +103,8 @@ class BaseTrainer:
 
         torch.save(model.encoder.state_dict(), f"pretrained/encoder_ho_1.pth")
         torch.save(model.decoder.state_dict(), f"pretrained/decoder_ho_1.pth")
+        if model.sigma is not None:
+            torch.save(model.sigma.state_dict(), f"pretrained/sigma_ho_1.pth")
         self.save_model(model, logdir, i_iter="last")
         return model, best_val_loss
 

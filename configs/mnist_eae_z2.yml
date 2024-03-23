@@ -8,7 +8,7 @@ model:
     arch: fc_vec
     l_hidden:  [1024, 1024, 1024, 1024]
     activation: ['relu', 'relu', 'relu', 'relu']
-    out_activation: 'sigmoid'
+    out_activation: 'linear'
     img_size: [1, 28, 28]
     out_chan_num: 1
   # decoder:
@@ -39,10 +39,12 @@ model:
   #   out_chan_num: 1
   x_dim: 784
   z_dim: 16
+  min_sigma: 0.03
+  max_sigma: 0.3
   energy_ae:
     sigma_sq: 0.5
     normalize: False
-    sigma_train: 'sigma'
+    sigma_train: 'encoder'
     epsilon: 1e-4
     gamma: 1.0
 data:
@@ -89,7 +91,7 @@ data:
   
 trainer: base
 training:
-  n_epoch: 500
+  n_epoch: 1500
   n_epoch_pre: 100
   n_epoch_ebm: 30
   fix_decoder: false

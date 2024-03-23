@@ -231,7 +231,7 @@ class EnergyAE(nn.Module):
             return self.encoder.sigma(x_star).squeeze(-1)
         elif self.sigma_train == 'sigma':
             x_star = self.decoder(z).view(len(z), -1) # (B, D)
-            return self.sigma(x_star).squeeze(-1)
+            return self.sigma.sigma(x_star).squeeze(-1)
         elif self.sigma_train == "independent":
             bs = z.shape[0]
             return torch.exp(self.log_sigma_sq).repeat(bs)
@@ -381,7 +381,7 @@ class EnergyAE(nn.Module):
         second_order_loss = Trace_hess/2
         reg_loss = relaxed_distortion_measure(self.decoder, z_star_detached, create_graph=True)
         if not eval:
-            neg_log_prob = (recon_loss + sigma_loss + log_det + latent_energy + second_order_loss + 10*reg_loss)/D # 
+            neg_log_prob = (recon_loss + sigma_loss + log_det + latent_energy + second_order_loss )/D # + 10*reg_loss
         else:
             neg_log_prob = (recon_loss + sigma_loss + log_det + latent_energy + second_order_loss)/D
         # neg_log_prob[failed_index] = 0
