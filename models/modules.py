@@ -251,6 +251,10 @@ class normalized_net(nn.Module):
     def forward(self, x):
         x = self.net(x)
         return x / torch.norm(x, dim=1, keepdim=True)
+    
+    def sigma(self, x):
+        x = self.net.sigma(x)
+        return x
 
 class sigma_net_normalizer(nn.Module):
     def __init__(self, net, min_sigma_sq, max_sigma_sq):
@@ -266,8 +270,9 @@ class sigma_net_normalizer(nn.Module):
         return x
     def sigma(self, x):
         x = self.net.sigma(x)
-        x = torch.sigmoid(x)
-        x = torch.exp(self.min + (self.max - self.min) * x)
+        # x = torch.sigmoid(x)
+        # x = torch.exp(self.min + (self.max - self.min) * x)
+        x = torch.exp(x)
         return x
 """
 ConvNet for (1, 28, 28) image, following architecture in (Ghosh et al., 2019)
@@ -517,7 +522,7 @@ class DeConvNet2(nn.Module):
         self.conv5 = nn.ConvTranspose2d(nh * 4, out_chan, kernel_size=3, bias=True)
 
         self.fc1 = nn.Linear(nh * 8 * 12 * 12, 1024)
-        self.fc2 = nn.Linear(1024, in_chan + 1)
+        self.fc2 = nn.Linear(1024, 1)
         self.in_chan, self.out_chan = in_chan, out_chan
         self.out_activation = get_activation(out_activation) 
 
@@ -557,7 +562,6 @@ class DeConvNet2(nn.Module):
         x = self.fc1(x)
         x = F.relu(x)
         x = self.fc2(x)
-        x = torch.exp(x)
         return x
 
 class DeConvNet3(nn.Module):

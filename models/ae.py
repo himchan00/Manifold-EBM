@@ -355,35 +355,41 @@ class EnergyAE(nn.Module):
         recon = self.decoder(z_star).view(len(x), -1) # (B, D)
         recon_loss = ((recon - x) ** 2).sum(dim = 1) / (2 * (sigma ** 2)) # (B,)
         sigma_loss = D * torch.log(sigma) # (B,)
-
-        # compute log det and latent energy
-        if self.normalize:
-            J = spherical_jacobian_of_f(partial(self.scaled_displacement, x = x.repeat(n-1, 1)), z_star_detached, create_graph=True)
-            G = J.permute(0, 2, 1)@J + self.epsilon* torch.eye(n-1).to(z_star_detached)
-            latent_energy = torch.zeros(bs).to(z_star_detached)       
-        else:
-            J = jacobian_of_f(partial(self.scaled_displacement, x = x.repeat(n, 1)), z_star_detached, create_graph=True)
-            G = J.permute(0, 2, 1)@J + self.epsilon * torch.eye(n).to(z_star_detached)
-            latent_energy = (z_star ** 2).sum(dim = 1) / 2
-
-        log_det = torch.logdet(G) / 2 
-        
-        
+        # compute jacobian
+        J = jacobian_of_f(partial(self.scaled_displacement, x = x.repeat(n, 1)), z_star_detached, create_graph=True)
         # compute hessian
         compute_batch_hessian = vmap(hessian(self.function_for_hessian, argnums = 0), in_dims = (0, 0))
         hess = compute_batch_hessian(z_star_detached, x) # (B, n, n)
-        if not self.normalize:
-            hess = hess + torch.eye(n).to(z_star_detached).repeat(bs, 1, 1)
+        # compute log det and latent energy
+        if self.normalize:
+            # Find T, orthonormal basis of tangent space
+            A = torch.randn(bs, n, n).to(z_star_detached)
+            A[:, :, 0] = z_star_detached
+            Q, _ = torch.linalg.qr(A)
+            T = Q[:, :, 1:]
 
-        # compute second order loss
-        Trace_hess = vmap(torch.trace)(torch.linalg.solve(G, hess)) # (B, )
-        # second_order_loss = neg_log_approx.apply(Trace_hess/2)
+            JT = J@T
+            G_eff = JT.permute(0, 2, 1)@JT #+ self.epsilon* torch.eye(n-1).to(z_star_detached)
+            hess_eff = T.permute(0, 2, 1)@hess@T
+            log_det = torch.logdet(G_eff) / 2
+            exlude_index = torch.isnan(log_det) | torch.isinf(log_det)
+            log_det[exlude_index] = 0
+            latent_energy = torch.zeros(bs).to(z_star_detached)
+            Trace_hess = vmap(torch.trace)(torch.linalg.solve(G_eff, hess_eff)) # (B, )
+            Trace_hess[exlude_index] = 0
+        else:
+            G = J.permute(0, 2, 1)@J + torch.eye(n).to(z_star_detached)
+            log_det = torch.logdet(G) / 2 
+            latent_energy = (z_star ** 2).sum(dim = 1) / 2
+            Trace_hess = vmap(torch.trace)(torch.linalg.solve(G, hess)) # (B, )
+
         second_order_loss = Trace_hess/2
         reg_loss = relaxed_distortion_measure(self.decoder, z_star_detached, create_graph=True)
+        constant_term = D/2 * torch.log(2*torch.tensor(np.pi)).to(z_star_detached)
         if not eval:
-            neg_log_prob = (recon_loss + sigma_loss + log_det + latent_energy + second_order_loss )/D # + 10*reg_loss
+            neg_log_prob = (recon_loss + sigma_loss + log_det + latent_energy + second_order_loss  + constant_term+ 10* + reg_loss)/D # +  + 
         else:
-            neg_log_prob = (recon_loss + sigma_loss + log_det + latent_energy + second_order_loss)/D
+            neg_log_prob = (recon_loss + sigma_loss + log_det + latent_energy + second_order_loss + constant_term)/D
         # neg_log_prob[failed_index] = 0
 
         d_return = {"neg_log_prob": neg_log_prob,

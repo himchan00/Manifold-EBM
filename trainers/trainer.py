@@ -23,8 +23,7 @@ class BaseTrainer:
         kwargs = {'dataset_size': len(train_loader.dataset)}
         i_iter = 0
         best_val_loss = np.inf
-
-        if model.sigma_train == "encoder" or "decoder":
+        if model.sigma_train == "encoder" or  model.sigma_train == "decoder":
             self.optimizer_pre = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
                                             {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
                                             ])

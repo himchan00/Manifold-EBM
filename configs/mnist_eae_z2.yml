@@ -18,15 +18,15 @@ model:
   #   out_activation: 'sigmoid'
   #   img_size: [1, 28, 28]
   #   out_chan_num: 1
-  # encoder: 
-  #   arch: conv2fc 
-  #   nh: 8
-  #   nh_mlp: 1024
-  #   out_activation: linear 
-  # decoder:
-  #   arch: deconv2
-  #   nh: 8
-  #   out_activation: sigmoid 
+  encoder: 
+    arch: conv2fc 
+    nh: 8
+    nh_mlp: 1024
+    out_activation: linear 
+  decoder:
+    arch: deconv2
+    nh: 8
+    out_activation: sigmoid 
   # sigma:
   #   arch: conv28
   #   activation: relu
@@ -37,15 +37,15 @@ model:
   #   activation: ['relu', 'relu', 'relu', 'relu', 'relu']
   #   out_activation: 'linear'
   #   out_chan_num: 1
-  x_dim: 784
+  x_dim: 1
   z_dim: 16
   min_sigma: 0.03
   max_sigma: 0.3
   energy_ae:
     sigma_sq: 0.5
-    normalize: False
-    sigma_train: 'encoder'
-    epsilon: 1e-4
+    normalize: True
+    sigma_train: 'decoder'
+    epsilon: 1e-3
     gamma: 1.0
 data:
   training:
