@@ -200,8 +200,10 @@ class EnergyAE(nn.Module):
         z : (B, n)
         returns d : (B, D)
         """
-        x_star = self.decoder(z).view(len(x), -1) # (B, D)
-        sigma = self.get_sigma(z) # (B,)
+        # x_star = self.decoder(z).view(len(x), -1) # (B, D)
+        # sigma = self.get_sigma(z) # (B,)
+        x_star, sigma = self.decoder.forward_with_sigma(z)
+        x_star = x_star.view(len(x), -1) # (B, D)
         return (x - x_star) / sigma.unsqueeze(1)
 
     def function_for_hessian(self, z, x):
@@ -213,9 +215,10 @@ class EnergyAE(nn.Module):
         """
         x = x.unsqueeze(0) # (1, D)
         z = z.unsqueeze(0) # (1, n)
-        d = self.scaled_displacement(z, x) # (1, D)
+        x_star, sigma = self.decoder.forward_with_sigma(z)
+        x_star = x_star.view(1, -1) # (1, D)
+        d = (x - x_star) / sigma.unsqueeze(1)
         d_detached = d.detach() # (1, D)
-        sigma = self.get_sigma(z) # (1,)
         D = x.shape[1]
         return (d_detached @ d.T + D * torch.log(sigma)).squeeze()
     
@@ -297,8 +300,8 @@ class EnergyAE(nn.Module):
         pos_e = d_train["neg_log_prob"]
         neg_e = d_train_neg["neg_log_prob"]
         loss = pos_e - neg_e
-        baseline = (pos_e.mean() + neg_e.mean()).detach() / 2
-        self.baseline = 0.995 * self.baseline + 0.005 * baseline
+        # baseline = (pos_e.mean() + neg_e.mean()).detach() / 2
+        # self.baseline = 0.995 * self.baseline + 0.005 * baseline
         reg_loss = (pos_e-self.baseline).pow(2).mean() + (neg_e-self.baseline).pow(2).mean()
         loss = loss.mean()
         loss = loss + self.gamma * reg_loss
@@ -310,49 +313,61 @@ class EnergyAE(nn.Module):
         optimizer.step()
 
         d_logging = {"loss" : loss.item(),
-                     "train/pos_e_": pos_e.mean().item(),
-                     "train/neg_e_": neg_e.mean().item(),
-                     "train/baseline_": self.baseline.item(),}
+                     "train/baseline_" : self.baseline.item()}
+        for key, values in d_train.items():
+            d_logging["train/" + key + "_"] = values.mean().item()
+        for key, values in d_train_neg.items():
+            d_logging["train/neg_" + key + "_"] = values.mean().item()
         return d_logging
     
     def encoder_train_step(self, x, optimizer, is_neg = False, **kwargs):
         optimizer.zero_grad()
         z_star = self.encoder(x)
         x = x.view(len(x), -1) # (B, D)
-        sigma = self.get_sigma(z_star) # (B,)
-        recon = self.decoder(z_star).view(len(x), -1) # (B, D)
+        # sigma = self.get_sigma(z_star) # (B,)
+        recon, sigma = self.decoder.forward_with_sigma(z_star)
+        recon = recon.view(len(x), -1) # (B, D)
+        sigma = sigma.squeeze(-1)
+        bs = x.shape[0]
+        D = self.x_dim
+        n = self.z_dim
+        # compute recon loss
+        # recon = self.decoder(z_star).view(len(x), -1) # (B, D)
         recon_loss = ((recon - x) ** 2).sum(dim = 1) / (2 * (sigma ** 2)) # (B,)
-        sigma_loss = self.x_dim * torch.log(sigma) # (B,)
+        sigma_loss = D * torch.log(sigma) # (B,)
         if self.normalize:
             latent_energy = torch.zeros(len(x)).to(z_star)
         else:
             latent_energy = (z_star ** 2).sum(dim = 1) / 2
-        loss = (recon_loss + sigma_loss + latent_energy)/self.x_dim
+        loss = (recon_loss + sigma_loss + latent_energy)/D
         loss = loss.mean()
         loss.backward()
         optimizer.step()
         if is_neg:
             d_logging = {"loss" : loss.item(),
                         "encoder_neg/recon_loss_": recon_loss.mean().item(),
-                        "encoder_neg/sigma_loss_": sigma_loss.mean().item(),
+                        "encoder_neg/sigma_": sigma.mean().item(),
                         "encoder_neg/latent_energy_": latent_energy.mean().item()}
         else:
             d_logging = {"loss" : loss.item(),
                         "encoder/recon_loss_": recon_loss.mean().item(),
-                        "encoder/sigma_loss_": sigma_loss.mean().item(),
+                        "encoder/sigma_": sigma.mean().item(),
                         "encoder/latent_energy_": latent_energy.mean().item()}
         return d_logging
     def neg_log_prob(self, x, eval = False):
         z_star = self.encoder(x)
         z_star_detached = z_star.detach()
         x = x.view(len(x), -1) # (B, D)
-        sigma = self.get_sigma(z_star) # (B,)
+        # sigma = self.get_sigma(z_star) # (B,)
+        recon, sigma = self.decoder.forward_with_sigma(z_star)
+        recon = recon.view(len(x), -1) # (B, D)
+        sigma = sigma.squeeze(-1)
 
         bs = x.shape[0]
         D = self.x_dim
         n = self.z_dim
         # compute recon loss
-        recon = self.decoder(z_star).view(len(x), -1) # (B, D)
+        # recon = self.decoder(z_star).view(len(x), -1) # (B, D)
         recon_loss = ((recon - x) ** 2).sum(dim = 1) / (2 * (sigma ** 2)) # (B,)
         sigma_loss = D * torch.log(sigma) # (B,)
         # compute jacobian
@@ -387,9 +402,9 @@ class EnergyAE(nn.Module):
         reg_loss = relaxed_distortion_measure(self.decoder, z_star_detached, create_graph=True)
         constant_term = D/2 * torch.log(2*torch.tensor(np.pi)).to(z_star_detached)
         if not eval:
-            neg_log_prob = (recon_loss + sigma_loss + log_det + latent_energy + second_order_loss  + constant_term+ 10* + reg_loss)/D # +  + 
+            neg_log_prob = (recon_loss + sigma_loss  + log_det + latent_energy + second_order_loss + constant_term)/D # +  + x+ 10* + reg_loss
         else:
-            neg_log_prob = (recon_loss + sigma_loss + log_det + latent_energy + second_order_loss + constant_term)/D
+            neg_log_prob = (recon_loss + sigma_loss + log_det + latent_energy + second_order_loss + constant_term)/D #  + log_det + latent_energy + second_order_loss + constant_term
         # neg_log_prob[failed_index] = 0
 
         d_return = {"neg_log_prob": neg_log_prob,
@@ -402,6 +417,7 @@ class EnergyAE(nn.Module):
         if not eval:
             d_return["reg_loss"] = reg_loss
         return d_return
+        #     d_return
     
 
     def visualization_step(self, dl, procedure, **kwargs):

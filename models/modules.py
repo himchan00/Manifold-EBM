@@ -104,7 +104,7 @@ class FC_image(nn.Module):
         return x
 
 class FC_for_decoder_and_sigma(nn.Module):
-    def __init__(self, z_dim, x_dim):
+    def __init__(self, z_dim, x_dim, sig_min = 1e-2, sig_max = 0.1):
         super().__init__()
         self.z_dim = z_dim
         self.x_dim = x_dim
@@ -120,6 +120,9 @@ class FC_for_decoder_and_sigma(nn.Module):
         self.fc4_s = nn.Linear(1024, 1024)
         self.fc5_s = nn.Linear(1024, 1024)
         self.fc6_s = nn.Linear(1024, 1)
+
+        self.sig_min = torch.tensor(sig_min)
+        self.sig_max = torch.tensor(sig_max)
 
     def forward(self, z):
         x = self.fc1(z)
@@ -152,8 +155,35 @@ class FC_for_decoder_and_sigma(nn.Module):
         x_s = self.fc5_s(x_s)
         x_s = F.relu(x_s)
         x_s = self.fc6_s(x_s)
-        # x_s = torch.exp(x_s)
+        x_s = torch.sigmoid(x_s)
+        x_s = torch.exp(torch.log(self.sig_min) + (torch.log(self.sig_max) - torch.log(self.sig_min)) * x_s)
         return x_s
+    
+    def forward_with_sigma(self, z):
+        x = self.fc1(z)
+        x = F.relu(x)
+        x = self.fc2(x)
+        x = F.relu(x)
+        x = self.fc3(x)
+        x = F.relu(x)
+
+        x_d = self.fc4_d(x)
+        x_d = F.relu(x_d)
+        x_d = self.fc5_d(x_d)
+        x_d = F.relu(x_d)
+        x_d = self.fc6_d(x_d)
+        x_d = torch.sigmoid(x_d)
+        dim = int(np.sqrt(x_d.shape[-1]))
+        x_d = x_d.reshape(-1, 1, dim, dim)
+
+        x_s = self.fc4_s(x)
+        x_s = F.relu(x_s)
+        x_s = self.fc5_s(x_s)
+        x_s = F.relu(x_s)
+        x_s = self.fc6_s(x_s)
+        x_s = torch.sigmoid(x_s)
+        x_s = torch.exp(torch.log(self.sig_min) + (torch.log(self.sig_max) - torch.log(self.sig_min)) * x_s)
+        return x_d, x_s.squeeze(-1)
 
 class FC_for_encoder_and_sigma(nn.Module):
     def __init__(self, z_dim, x_dim):
@@ -210,7 +240,7 @@ class FC_for_encoder_and_sigma(nn.Module):
         x_s = self.fc6_s(x_s)
         # x_s = torch.sigmoid(x_s)
         # x_s = torch.exp(torch.log(self.sig_min) + (torch.log(self.sig_max) - torch.log(self.sig_min)) * x_s)
-        # x_s = torch.exp(x_s)
+        x_s = torch.exp(x_s)
         return x_s
 
 class IsotropicGaussian(nn.Module):
@@ -512,7 +542,7 @@ class ConvNet2FC(nn.Module):
 
 class DeConvNet2(nn.Module):
     def __init__(self, in_chan=1, out_chan=1, nh=8, out_activation='linear',
-                 use_spectral_norm=False):
+                 use_spectral_norm=False, sig_min = 1e-2, sig_max = 0.1):
         """nh: determines the numbers of conv filters"""
         super(DeConvNet2, self).__init__()
         self.conv1 = nn.ConvTranspose2d(in_chan, nh * 16, kernel_size=4, bias=True)
@@ -525,6 +555,9 @@ class DeConvNet2(nn.Module):
         self.fc2 = nn.Linear(1024, 1)
         self.in_chan, self.out_chan = in_chan, out_chan
         self.out_activation = get_activation(out_activation) 
+
+        self.sig_min = torch.tensor(sig_min)
+        self.sig_max = torch.tensor(sig_max)
 
     def forward(self, x):
         if len(x.size()) == 4:
@@ -562,7 +595,36 @@ class DeConvNet2(nn.Module):
         x = self.fc1(x)
         x = F.relu(x)
         x = self.fc2(x)
+        x = torch.sigmoid(x)
+        x = torch.exp(torch.log(self.sig_min) + (torch.log(self.sig_max) - torch.log(self.sig_min)) * x)
         return x
+    
+    def forward_with_sigma(self, x):
+        if len(x.size()) == 4:
+            pass
+        else:
+            x = x.unsqueeze(2).unsqueeze(2)
+        x = self.conv1(x)
+        x = F.relu(x)
+        x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
+        x = self.conv2(x)
+        x = F.relu(x)
+        x = self.conv3(x)
+        x = F.relu(x)
+        
+        x_d = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
+        x_d = self.conv4(x_d)
+        x_d = F.relu(x_d)
+        x_d = self.conv5(x_d)
+        if self.out_activation is not None:
+            x_d = self.out_activation(x_d)
+        x_s = x.view(x.size(0), -1)
+        x_s = self.fc1(x_s)
+        x_s = F.relu(x_s)
+        x_s = self.fc2(x_s)
+        x_s = torch.sigmoid(x_s)
+        x_s = torch.exp(torch.log(self.sig_min) + (torch.log(self.sig_max) - torch.log(self.sig_min)) * x_s)
+        return x_d, x_s.squeeze(-1)
 
 class DeConvNet3(nn.Module):
     def __init__(self, in_chan=1, out_chan=1, nh=8, out_activation='linear',

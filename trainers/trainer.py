@@ -42,8 +42,8 @@ class BaseTrainer:
         self.optimizer_min = optim.Adam([{'params': model.encoder.parameters(), 'lr':cfg.optimizer['lr_encoder']}])
 
 
-        # model.encoder.load_state_dict(torch.load(f"pretrained/encoder_vae_ho_1_0.01.pth"))
-        # model.decoder.load_state_dict(torch.load(f"pretrained/decoder_ho_1_lr_1e-4_original.pth"))
+        model.encoder.load_state_dict(torch.load(f"pretrained/encoder_ho_1_unnorm.pth"))
+        model.decoder.load_state_dict(torch.load(f"pretrained/decoder_ho_1_unnorm.pth"))
         # model.minimizer.load_state_dict(torch.load(f"pretrained/minimizer_ho_1_lr_1e-4_original.pth"))
 
 
@@ -52,11 +52,13 @@ class BaseTrainer:
                 model.train()
                 start_ts = time.time()
 
-                # neg_x = model.sample(batch_size = x.shape[0], device=self.device)
-                # d_train_p = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_min, **kwargs)
+                neg_x = model.sample(batch_size = x.shape[0], device=self.device)
+                neg_x = neg_x.to(x.device)
+                x_concat = torch.cat([x, neg_x], dim = 0)
+                d_train_p = model.encoder_train_step(x_concat.to(self.device), optimizer=self.optimizer_min, **kwargs)
                 # d_train_p_neg = model.encoder_train_step(neg_x.to(self.device), optimizer=self.optimizer_min, is_neg = True, **kwargs)
-                d_train_t = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, **kwargs)
-                # d_train_t = model.train_step(x.to(self.device), neg_x.to(self.device), optimizer=self.optimizer, **kwargs)
+                # d_train_t = model.pretrain_step(x.to(self.device), optimizer_pre=self.optimizer_pre, **kwargs)
+                d_train_t = model.train_step(x.to(self.device), neg_x.to(self.device), optimizer=self.optimizer, **kwargs)
                     
 
                 time_meter.update(time.time() - start_ts)
@@ -69,7 +71,7 @@ class BaseTrainer:
                     time_meter.reset()
                     logger.add_val(i_iter, d_train)
                     logger.add_val(i_iter, d_train_t)
-                    # logger.add_val(i_iter, d_train_p)
+                    logger.add_val(i_iter, d_train_p)
                     # logger.add_val(i_iter, d_train_p_neg)
 
 
@@ -85,25 +87,25 @@ class BaseTrainer:
                         logger.add_val(i_iter, {f'validation/mean_in/{key}_': val.mean()})
                         logger.add_val(i_iter, {f'validation/mean_ood/{key}_': ood1_pred[key].mean()})
 
-                    in_pred = self.predict(model, test_loader, self.device)
-                    ood1_pred = self.predict(model, OOD_test_loader, self.device)
-                    for key, val in in_pred.items():
-                        auc_val = roc_btw_arr(ood1_pred[key], val)
-                        print(f'AUC_test({key}): ', auc_val)
-                        print(f'mean_in: {val.mean()}, mean_ood: {ood1_pred[key].mean()}')
-                        logger.add_val(i_iter, {f'test/auc/{key}_': auc_val})
-                        logger.add_val(i_iter, {f'test/mean_in/{key}_': val.mean()})
-                        logger.add_val(i_iter, {f'test/mean_ood/{key}_': ood1_pred[key].mean()})
+                    # in_pred = self.predict(model, test_loader, self.device)
+                    # ood1_pred = self.predict(model, OOD_test_loader, self.device)
+                    # for key, val in in_pred.items():
+                    #     auc_val = roc_btw_arr(ood1_pred[key], val)
+                    #     print(f'AUC_test({key}): ', auc_val)
+                    #     print(f'mean_in: {val.mean()}, mean_ood: {ood1_pred[key].mean()}')
+                    #     logger.add_val(i_iter, {f'test/auc/{key}_': auc_val})
+                    #     logger.add_val(i_iter, {f'test/mean_in/{key}_': val.mean()})
+                    #     logger.add_val(i_iter, {f'test/mean_ood/{key}_': ood1_pred[key].mean()})
                 
                 if i_iter % cfg.visualize_interval == 0:
                     d_val = model.visualization_step(train_loader, procedure = "train", device=self.device)
                     logger.add_val(i_iter, d_val)
                 i_iter += 1
 
-        torch.save(model.encoder.state_dict(), f"pretrained/encoder_ho_1.pth")
-        torch.save(model.decoder.state_dict(), f"pretrained/decoder_ho_1.pth")
-        if model.sigma is not None:
-            torch.save(model.sigma.state_dict(), f"pretrained/sigma_ho_1.pth")
+        # torch.save(model.encoder.state_dict(), f"pretrained/encoder_ho_1_unnorm.pth")
+        # torch.save(model.decoder.state_dict(), f"pretrained/decoder_ho_1_unnorm.pth")
+        # if model.sigma is not None:
+        #     torch.save(model.sigma.state_dict(), f"pretrained/sigma_ho_1.pth")
         self.save_model(model, logdir, i_iter="last")
         return model, best_val_loss
 

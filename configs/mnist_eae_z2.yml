@@ -27,6 +27,8 @@ model:
     arch: deconv2
     nh: 8
     out_activation: sigmoid 
+    sig_min: 0.01
+    sig_max: 0.1
   # sigma:
   #   arch: conv28
   #   activation: relu
@@ -39,19 +41,19 @@ model:
   #   out_chan_num: 1
   x_dim: 1
   z_dim: 16
-  min_sigma: 0.03
-  max_sigma: 0.3
+  min_sigma: 0.01
+  max_sigma: 0.1
   energy_ae:
     sigma_sq: 0.5
-    normalize: True
+    normalize: False
     sigma_train: 'decoder'
     epsilon: 1e-3
-    gamma: 1.0
+    gamma: 0.1
 data:
   training:
     dataset: MNIST
     root: dataset
-    batch_size: 512
+    batch_size: 256
     n_workers: 4
     split: training
     shuffle: True
@@ -59,7 +61,7 @@ data:
   validation:
     dataset: MNIST
     root: dataset
-    batch_size: 512
+    batch_size: 256
     n_workers: 4
     split: validation
     shuffle: False
@@ -67,7 +69,7 @@ data:
   test:
     dataset: MNIST
     root: dataset
-    batch_size: 512
+    batch_size: 256
     n_workers: 4
     split: test
     shuffle: False
@@ -75,7 +77,7 @@ data:
   OOD_validation:
     dataset: MNIST
     root: dataset
-    batch_size: 512
+    batch_size: 256
     n_workers: 4
     split: validation
     shuffle: False
@@ -83,7 +85,7 @@ data:
   OOD_test:
     dataset: MNIST
     root: dataset
-    batch_size: 512
+    batch_size: 256
     n_workers: 4
     split: test
     shuffle: False
@@ -100,7 +102,7 @@ training:
     lr: 1e-4
   optimizer:
     lr_encoder: 1e-4
-    lr_decoder: 1e-4
+    lr_decoder: 1e-5
     lr_constant: 1e-3
     lr_sigma: 1e-4
   print_interval: 200
