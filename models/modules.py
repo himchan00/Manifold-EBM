@@ -242,6 +242,29 @@ class FC_for_encoder_and_sigma(nn.Module):
         # x_s = torch.exp(torch.log(self.sig_min) + (torch.log(self.sig_max) - torch.log(self.sig_min)) * x_s)
         x_s = torch.exp(x_s)
         return x_s
+    
+    def forward_with_eta(self, x):
+        if len(x.size()) == 4:
+            x = x.view(x.size(0), -1)
+        x = self.fc1(x)
+        x = F.relu(x)
+        x = self.fc2(x)
+        x = F.relu(x)
+        x = self.fc3(x)
+        x = F.relu(x)
+        
+        x_e = self.fc4_e(x)
+        x_e = F.relu(x_e)
+        x_e = self.fc5_e(x_e)
+        x_e = F.relu(x_e)
+        x_e = self.fc6_e(x_e)
+
+        x_s = self.fc4_s(x)
+        x_s = F.relu(x_s)
+        x_s = self.fc5_s(x_s)
+        x_s = F.relu(x_s)
+        x_s = self.fc6_s(x_s)
+        return x_e, x_s.squeeze(-1)
 
 class IsotropicGaussian(nn.Module):
     """Isotripic Gaussian density function paramerized by a neural net.

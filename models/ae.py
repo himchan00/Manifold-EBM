@@ -178,6 +178,7 @@ class EnergyAE(nn.Module):
         self.register_parameter("log_sigma_sq", nn.Parameter(torch.log(sigma_sq * torch.ones(1))))
         self.register_parameter("constant_term", nn.Parameter(torch.tensor(0.0)))
         self.baseline = torch.tensor(0.0)
+        self.max_latent_variance = torch.tensor(0.01)
 
     def sample(self, batch_size, device, apply_noise = True):
 
@@ -187,9 +188,9 @@ class EnergyAE(nn.Module):
         # decode
         with torch.no_grad():
             x = self.decoder(z)
-            if apply_noise:
-                    sigma = self.get_sigma(z)
-                    x = x + torch.randn_like(x) * sigma.unsqueeze(1).unsqueeze(2).unsqueeze(3)
+            # if apply_noise:
+                    # sigma = self.get_sigma(z)
+                    # x = x + torch.randn_like(x) * sigma.unsqueeze(1).unsqueeze(2).unsqueeze(3)
         
         return x
     
@@ -206,21 +207,25 @@ class EnergyAE(nn.Module):
         x_star = x_star.view(len(x), -1) # (B, D)
         return (x - x_star) / sigma.unsqueeze(1)
 
-    def function_for_hessian(self, z, x):
+
+    def function_for_hessian(self, z, x, sigma):
         """
-        caculate d.detach().T @ d + D * log(sigma)
+        caculate d.detach().T @ d
         x : (D)
         z : (n)
+        sigma : (1)
         returns (,)
         """
         x = x.unsqueeze(0) # (1, D)
         z = z.unsqueeze(0) # (1, n)
-        x_star, sigma = self.decoder.forward_with_sigma(z)
-        x_star = x_star.view(1, -1) # (1, D)
-        d = (x - x_star) / sigma.unsqueeze(1)
-        d_detached = d.detach() # (1, D)
-        D = x.shape[1]
-        return (d_detached @ d.T + D * torch.log(sigma)).squeeze()
+        # x_star, sigma = self.decoder.forward_with_sigma(z)
+        # x_star = x_star.view(1, -1) # (1, D)
+        # d = (x - x_star) / sigma.unsqueeze(1)
+        # d_detached = d.detach() # (1, D)
+        x_star = self.decoder(z).view(1, -1) # (1, D)
+        d = (x - x_star) / sigma.unsqueeze(1) # (1, D)
+        d_detached = d.detach() 
+        return (d_detached @ d.T).squeeze()
     
     def get_sigma(self, z):
         """
@@ -241,6 +246,64 @@ class EnergyAE(nn.Module):
         else:
             raise ValueError("sigma_train should be one of 'decoder', 'encoder', 'sigma', independent'")
     
+    def vae_train_step(self, x, optimizer, **kwargs):
+        optimizer.zero_grad()
+        z_star, eta = self.encoder.forward_with_eta(x)
+        sigma = torch.exp(eta) # (B,)
+        x = x.view(len(x), -1) # (B, D)
+
+        bs = x.shape[0]
+        D = self.x_dim
+        n = self.z_dim
+        
+        # compute jacobian
+        J = jacobian_of_f(self.decoder, z_star, create_graph=True)
+        # compute hessian
+        compute_batch_hessian = vmap(hessian(self.function_for_hessian, argnums = 0), in_dims = (0, 0, 0))
+        hess = compute_batch_hessian(z_star, x, sigma.unsqueeze(1)) # (B, n, n)
+        # compute precision matrix
+        Precision = J.permute(0, 2, 1)@J/((sigma**2).unsqueeze(1).unsqueeze(2)) + torch.eye(n).to(z_star) + hess
+        # Find minimum eigenvalue
+        L = torch.linalg.eigvalsh(Precision).detach()
+        L_min = torch.min(L, dim = 1).values # (B,)
+        
+        # Insure that eigenvalues of precision matrix are greater than 1/max_latent_variance
+        delta = 1/self.max_latent_variance - L_min # (B,)
+        Precision = Precision + torch.eye(n).to(z_star).repeat(bs, 1, 1) * delta.unsqueeze(1).unsqueeze(2)
+
+        # posterior sampling
+        L = torch.linalg.cholesky(Precision)
+        eps = torch.randn_like(z_star)
+        z_sample = z_star + torch.linalg.solve(L.permute(0, 2, 1), eps.unsqueeze(-1)).squeeze(-1)
+
+        recon = self.decoder(z_sample).view(len(x), -1)
+
+        # compute recon loss
+        recon_loss = ((recon - x) ** 2).sum(dim = 1) / (2 * (sigma ** 2)) # (B,)
+
+        # compute latent energy
+        latent_energy = (z_sample ** 2).sum(dim = 1) / 2
+
+        # compute log det
+        logdet_loss = torch.logdet(Precision) / 2
+
+        # compute sigma_loss
+        sigma_loss = D * torch.log(sigma) # (B,)
+        loss = (recon_loss + latent_energy + logdet_loss + sigma_loss)/D
+        loss = loss.mean()
+        loss.backward()
+
+        torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), 0.1)
+        torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 0.1)
+
+        optimizer.step()
+        d_logging = {"loss" : loss.item(),
+                    "train/recon_loss_": recon_loss.mean().item(),
+                    "train/sigma_": sigma.mean().item(),
+                    "train/latent_energy_": latent_energy.mean().item(),
+                    "train/logdet_loss_": logdet_loss.mean().item()}
+        return d_logging
+
     def get_energy(self, x, z):
         """
         x : (D), z: (n)
