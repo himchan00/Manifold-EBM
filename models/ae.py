@@ -178,7 +178,7 @@ class EnergyAE(nn.Module):
         self.register_parameter("log_sigma_sq", nn.Parameter(torch.log(sigma_sq * torch.ones(1))))
         self.register_parameter("constant_term", nn.Parameter(torch.tensor(0.0)))
         self.baseline = torch.tensor(0.0)
-        self.max_latent_variance = torch.tensor(0.01)
+        self.max_latent_variance = torch.tensor(0.1)
 
     def sample(self, batch_size, device, apply_noise = True):
 
@@ -264,17 +264,18 @@ class EnergyAE(nn.Module):
         # compute precision matrix
         Precision = J.permute(0, 2, 1)@J/((sigma**2).unsqueeze(1).unsqueeze(2)) + torch.eye(n).to(z_star) + hess
         # Find minimum eigenvalue
-        L = torch.linalg.eigvalsh(Precision).detach()
-        L_min = torch.min(L, dim = 1).values # (B,)
+        eigvals = torch.linalg.eigvalsh(Precision)
+        eigvals_min = torch.min(eigvals, dim = 1).values # (B,)
         
         # Insure that eigenvalues of precision matrix are greater than 1/max_latent_variance
-        delta = 1/self.max_latent_variance - L_min # (B,)
+        delta = 1/self.max_latent_variance - eigvals_min # (B,)
         Precision = Precision + torch.eye(n).to(z_star).repeat(bs, 1, 1) * delta.unsqueeze(1).unsqueeze(2)
+        eigvals = eigvals + delta.unsqueeze(1)
 
         # posterior sampling
-        L = torch.linalg.cholesky(Precision)
+        L = torch.linalg.cholesky(Precision, upper = True)
         eps = torch.randn_like(z_star)
-        z_sample = z_star + torch.linalg.solve(L.permute(0, 2, 1), eps.unsqueeze(-1)).squeeze(-1)
+        z_sample = z_star + torch.linalg.solve(L, eps.unsqueeze(-1)).squeeze(-1)
 
         recon = self.decoder(z_sample).view(len(x), -1)
 
@@ -285,7 +286,7 @@ class EnergyAE(nn.Module):
         latent_energy = (z_sample ** 2).sum(dim = 1) / 2
 
         # compute log det
-        logdet_loss = torch.logdet(Precision) / 2
+        logdet_loss = torch.log(eigvals).sum(dim = 1)/2 # (B,)
 
         # compute sigma_loss
         sigma_loss = D * torch.log(sigma) # (B,)
