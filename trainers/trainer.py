@@ -8,12 +8,10 @@ from utils.utils import roc_btw_arr
 
 class BaseTrainer:
     """Trainer for a conventional iterative training of model for classification"""
-    def __init__(self, optimizer, optimizer_pre, optimizer_e, training_cfg, device):
+    def __init__(self, optimizer, training_cfg, device):
         self.training_cfg = training_cfg
         self.device = device
         self.optimizer = optimizer
-        self.optimizer_pre = optimizer_pre
-        self.optimizer_e = optimizer_e
 
     def train(self, model, d_dataloaders, logger=None, logdir=""):
         cfg = self.training_cfg
@@ -23,24 +21,6 @@ class BaseTrainer:
         kwargs = {'dataset_size': len(train_loader.dataset)}
         i_iter = 0
         best_val_loss = np.inf
-        if model.sigma_train == "encoder" or  model.sigma_train == "decoder":
-            self.optimizer_pre = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
-                                            {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
-                                            ])
-        elif model.sigma_train == "sigma":
-            self.optimizer_pre = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
-                                             {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
-                                             {'params': model.sigma.parameters(), 'lr': cfg.optimizer['lr_sigma']}
-                                             ])
-        else:
-            self.optimizer_pre = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
-                                             {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
-                                             {'params': model.log_sigma_sq, 'lr': cfg.optimizer['lr_sigma']}
-                                             ])
-        
-        self.optimizer = optim.Adam([{'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']}])
-        self.optimizer_min = optim.Adam([{'params': model.encoder.parameters(), 'lr':cfg.optimizer['lr_encoder']}])
-
 
         # model.encoder.load_state_dict(torch.load(f"pretrained/encoder_ho_1_unnorm.pth"))
         # model.decoder.load_state_dict(torch.load(f"pretrained/decoder_ho_1_unnorm.pth"))
@@ -52,7 +32,7 @@ class BaseTrainer:
                 model.train()
                 start_ts = time.time()
 
-                d_train_t = model.vae_train_step(x.to(self.device), optimizer=self.optimizer_pre, **kwargs)
+                d_train_t = model.train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
                     
 
                 time_meter.update(time.time() - start_ts)
@@ -67,17 +47,17 @@ class BaseTrainer:
                     logger.add_val(i_iter, d_train_t)
 
 
-                # model.eval()
-                # if i_iter % cfg.val_interval == 0:
-                #     in_pred = self.predict(model, val_loader, self.device)
-                #     ood1_pred = self.predict(model, OOD_val_loader, self.device)
-                #     for key, val in in_pred.items():
-                #         auc_val = roc_btw_arr(ood1_pred[key], val)
-                #         print(f'AUC_val({key}): ', auc_val)
-                #         print(f'mean_in: {val.mean()}, mean_ood: {ood1_pred[key].mean()}')
-                #         logger.add_val(i_iter, {f'validation/auc/{key}_': auc_val})
-                #         logger.add_val(i_iter, {f'validation/mean_in/{key}_': val.mean()})
-                #         logger.add_val(i_iter, {f'validation/mean_ood/{key}_': ood1_pred[key].mean()})
+                model.eval()
+                if i_iter % cfg.val_interval == 0:
+                    in_pred = self.predict(model, val_loader, self.device)
+                    ood1_pred = self.predict(model, OOD_val_loader, self.device)
+                    for key, val in in_pred.items():
+                        auc_val = roc_btw_arr(ood1_pred[key], val)
+                        print(f'AUC_val({key}): ', auc_val)
+                        print(f'mean_in: {val.mean()}, mean_ood: {ood1_pred[key].mean()}')
+                        logger.add_val(i_iter, {f'validation/auc/{key}_': auc_val})
+                        logger.add_val(i_iter, {f'validation/mean_in/{key}_': val.mean()})
+                        logger.add_val(i_iter, {f'validation/mean_ood/{key}_': ood1_pred[key].mean()})
 
                     # in_pred = self.predict(model, test_loader, self.device)
                     # ood1_pred = self.predict(model, OOD_test_loader, self.device)
@@ -96,8 +76,7 @@ class BaseTrainer:
 
         # torch.save(model.encoder.state_dict(), f"pretrained/encoder_ho_1_unnorm.pth")
         # torch.save(model.decoder.state_dict(), f"pretrained/decoder_ho_1_unnorm.pth")
-        # if model.sigma is not None:
-        #     torch.save(model.sigma.state_dict(), f"pretrained/sigma_ho_1.pth")
+
         self.save_model(model, logdir, i_iter="last")
         return model, best_val_loss
 
@@ -122,7 +101,7 @@ class BaseTrainer:
             with torch.no_grad():
                 if flatten:
                     x = x.view(len(x), -1)
-                pred = m.neg_log_prob(x.cuda(device), eval = True)
+                pred = m.neg_log_prob(x.cuda(device), n_eval = 10)
 
             for key, val in pred.items():
                 if key in l_result:

@@ -160,53 +160,24 @@ class AE(nn.Module):
 
 class EnergyAE(nn.Module):
     def __init__(
-        self, encoder, decoder, sigma, sigma_sq=1e-4,
-        radius = 1.0, sigma_train = "decoder", epsilon = 1e-3,
-        gamma = 1.0, normalize = False
+        self, encoder, decoder, z_dim, max_latent_variance = 0.1
     ):
         super(EnergyAE, self).__init__()
         self.encoder = encoder
         self.decoder = decoder
-        self.sigma = sigma
-        self.z_dim = 16
-        self.x_dim = 784
-        self.radius = radius
-        self.sigma_train = sigma_train # choices : "decoder", "encoder", "independent"
-        self.epsilon = epsilon
-        self.gamma = gamma
-        self.normalize = normalize
-        self.register_parameter("log_sigma_sq", nn.Parameter(torch.log(sigma_sq * torch.ones(1))))
-        self.register_parameter("constant_term", nn.Parameter(torch.tensor(0.0)))
-        self.baseline = torch.tensor(0.0)
-        self.max_latent_variance = torch.tensor(0.1)
+        self.z_dim = z_dim
+        self.max_latent_variance = torch.tensor(max_latent_variance)
 
-    def sample(self, batch_size, device, apply_noise = True):
+
+    def sample(self, batch_size, device):
 
         z = torch.randn((batch_size, self.z_dim), device=device)
-        if self.normalize:
-            z = z / z.norm(dim=1, keepdim=True)
         # decode
         with torch.no_grad():
             x = self.decoder(z)
-            # if apply_noise:
-                    # sigma = self.get_sigma(z)
-                    # x = x + torch.randn_like(x) * sigma.unsqueeze(1).unsqueeze(2).unsqueeze(3)
         
         return x
     
-    def scaled_displacement(self, z, x):
-        """
-        calculate the scaled displacement, d = (x - f(z))/sigma(z)
-        x : (B, D)
-        z : (B, n)
-        returns d : (B, D)
-        """
-        # x_star = self.decoder(z).view(len(x), -1) # (B, D)
-        # sigma = self.get_sigma(z) # (B,)
-        x_star, sigma = self.decoder.forward_with_sigma(z)
-        x_star = x_star.view(len(x), -1) # (B, D)
-        return (x - x_star) / sigma.unsqueeze(1)
-
 
     def function_for_hessian(self, z, x, sigma):
         """
@@ -218,43 +189,35 @@ class EnergyAE(nn.Module):
         """
         x = x.unsqueeze(0) # (1, D)
         z = z.unsqueeze(0) # (1, n)
-        # x_star, sigma = self.decoder.forward_with_sigma(z)
-        # x_star = x_star.view(1, -1) # (1, D)
-        # d = (x - x_star) / sigma.unsqueeze(1)
-        # d_detached = d.detach() # (1, D)
         x_star = self.decoder(z).view(1, -1) # (1, D)
         d = (x - x_star) / sigma.unsqueeze(1) # (1, D)
         d_detached = d.detach() 
         return (d_detached @ d.T).squeeze()
     
-    def get_sigma(self, z):
-        """
-        z : (B, n)
-        returns sigma of shape (B,)
-        """
-        if self.sigma_train == "decoder":
-            return self.decoder.sigma(z).squeeze(-1)
-        elif self.sigma_train == "encoder":
-            x_star = self.decoder(z).view(len(z), -1) # (B, D)
-            return self.encoder.sigma(x_star).squeeze(-1)
-        elif self.sigma_train == 'sigma':
-            x_star = self.decoder(z).view(len(z), -1) # (B, D)
-            return self.sigma.sigma(x_star).squeeze(-1)
-        elif self.sigma_train == "independent":
-            bs = z.shape[0]
-            return torch.exp(self.log_sigma_sq).repeat(bs)
-        else:
-            raise ValueError("sigma_train should be one of 'decoder', 'encoder', 'sigma', independent'")
-    
-    def vae_train_step(self, x, optimizer, **kwargs):
+        
+    def train_step(self, x, optimizer, **kwargs):
         optimizer.zero_grad()
-        z_star, eta = self.encoder.forward_with_eta(x)
-        sigma = torch.exp(eta) # (B,)
+        d_train = self.neg_log_prob(x)
+        loss = d_train["neg_log_prob"]
+        loss = loss.mean()
+        loss.backward()
+
+        torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), 0.1)
+        torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 0.1)
+
+        optimizer.step()
+        
+        d_logging = d_train
+        d_logging["loss"] = loss.item()
+        return d_logging
+
+    def neg_log_prob(self, x, n_eval = 1):
+        z_star, sigma = self.encoder.forward_with_sigma(x)
         x = x.view(len(x), -1) # (B, D)
 
         bs = x.shape[0]
-        D = self.x_dim
-        n = self.z_dim
+        D = x.shape[1]
+        n = z_star.shape[1]
         
         # compute jacobian
         J = jacobian_of_f(self.decoder, z_star, create_graph=True)
@@ -274,214 +237,31 @@ class EnergyAE(nn.Module):
 
         # posterior sampling
         L = torch.linalg.cholesky(Precision, upper = True)
-        eps = torch.randn_like(z_star)
-        z_sample = z_star + torch.linalg.solve(L, eps.unsqueeze(-1)).squeeze(-1)
+        eps = torch.randn((n_eval, bs, n)).to(z_star)
+        z_sample = z_star.unsqueeze(0) + torch.linalg.solve(L.unsqueeze(0), eps.unsqueeze(-1)).squeeze(-1) # (n_eval, B, n)
 
-        recon = self.decoder(z_sample).view(len(x), -1)
+        recon = self.decoder(z_sample.view(-1, n)).view(n_eval, bs, D)
 
         # compute recon loss
-        recon_loss = ((recon - x) ** 2).sum(dim = 1) / (2 * (sigma ** 2)) # (B,)
+        recon_loss = ((recon - x.unsqueeze(0)) ** 2).sum(dim = 2).mean(dim = 0) / (2 * (sigma ** 2)) # (B,)
 
         # compute latent energy
-        latent_energy = (z_sample ** 2).sum(dim = 1) / 2
+        latent_energy = (z_star ** 2).sum(dim = 1) / 2 + (1 / eigvals).sum(dim = 1)/2
 
         # compute log det
         logdet_loss = torch.log(eigvals).sum(dim = 1)/2 # (B,)
 
         # compute sigma_loss
         sigma_loss = D * torch.log(sigma) # (B,)
-        loss = (recon_loss + latent_energy + logdet_loss + sigma_loss)/D
-        loss = loss.mean()
-        loss.backward()
-
-        torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), 0.1)
-        torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 0.1)
-
-        optimizer.step()
-        d_logging = {"loss" : loss.item(),
-                    "train/recon_loss_": recon_loss.mean().item(),
-                    "train/sigma_": sigma.mean().item(),
-                    "train/latent_energy_": latent_energy.mean().item(),
-                    "train/logdet_loss_": logdet_loss.mean().item()}
-        return d_logging
-
-    def get_energy(self, x, z):
-        """
-        x : (D), z: (n)
-        """
-        x_star = self.decoder(z).view(-1) # (D)
-        D = x.shape[0]
-        if self.train_sigma:
-            sigma = self.decoder.sigma(z)
-        else:
-            sigma = torch.exp(self.log_sigma_sq)
-        energy = (x - x_star).pow(2).sum() / (2 * (sigma ** 2))
-        energy = energy + D * torch.log(sigma)
-        energy = energy + 0.5 * (z ** 2).sum()
-        return energy.squeeze()
-    
-    def conditional_energy_function(self, x, z):
-        """
-        x : (D), z: (n)
-        """
-        x_star = self.decoder(z).view(-1) # (D)
-        D = x_star.shape[0]
-        if self.train_sigma:
-            sigma = self.decoder.sigma(z)
-        else:
-            sigma = torch.exp(self.log_sigma_sq)
-        energy = (x - x_star).pow(2).sum() / (2 * (sigma ** 2))
-        energy = energy + D * torch.log(sigma)
-        return energy.squeeze()
-
-
-    def pretrain_step(self, x, optimizer_pre, is_neg = False, **kwargs):
-        optimizer_pre.zero_grad()
-        d_train = self.neg_log_prob(x, eval = False)
-        loss = d_train["neg_log_prob"]
-        loss = loss.mean()
-        loss.backward()
-
-        torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), 0.1)
-        torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 0.1)
-
-        optimizer_pre.step()
-        
-        d_logging = {"loss" : loss.item()}
-
-        for key, values in d_train.items():
-            if is_neg:
-                d_logging["neg_pretrain/" + key + "_"] = values.mean().item()
-            else:
-                d_logging["pretrain/" + key + "_"] = values.mean().item()
-        return d_logging
-    
-
-    def train_step(self, x, neg_x, optimizer, **kwargs):
-        optimizer.zero_grad()
-        d_train = self.neg_log_prob(x, eval = False)
-        d_train_neg = self.neg_log_prob(neg_x, eval = False)
-        pos_e = d_train["neg_log_prob"]
-        neg_e = d_train_neg["neg_log_prob"]
-        loss = pos_e - neg_e
-        # baseline = (pos_e.mean() + neg_e.mean()).detach() / 2
-        # self.baseline = 0.995 * self.baseline + 0.005 * baseline
-        reg_loss = (pos_e-self.baseline).pow(2).mean() + (neg_e-self.baseline).pow(2).mean()
-        loss = loss.mean()
-        loss = loss + self.gamma * reg_loss
-        loss.backward()
-
-        torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), 0.1)
-        torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 0.1)
-
-        optimizer.step()
-
-        d_logging = {"loss" : loss.item(),
-                     "train/baseline_" : self.baseline.item()}
-        for key, values in d_train.items():
-            d_logging["train/" + key + "_"] = values.mean().item()
-        for key, values in d_train_neg.items():
-            d_logging["train/neg_" + key + "_"] = values.mean().item()
-        return d_logging
-    
-    def encoder_train_step(self, x, optimizer, is_neg = False, **kwargs):
-        optimizer.zero_grad()
-        z_star = self.encoder(x)
-        x = x.view(len(x), -1) # (B, D)
-        # sigma = self.get_sigma(z_star) # (B,)
-        recon, sigma = self.decoder.forward_with_sigma(z_star)
-        recon = recon.view(len(x), -1) # (B, D)
-        sigma = sigma.squeeze(-1)
-        bs = x.shape[0]
-        D = self.x_dim
-        n = self.z_dim
-        # compute recon loss
-        # recon = self.decoder(z_star).view(len(x), -1) # (B, D)
-        recon_loss = ((recon - x) ** 2).sum(dim = 1) / (2 * (sigma ** 2)) # (B,)
-        sigma_loss = D * torch.log(sigma) # (B,)
-        if self.normalize:
-            latent_energy = torch.zeros(len(x)).to(z_star)
-        else:
-            latent_energy = (z_star ** 2).sum(dim = 1) / 2
-        loss = (recon_loss + sigma_loss + latent_energy)/D
-        loss = loss.mean()
-        loss.backward()
-        optimizer.step()
-        if is_neg:
-            d_logging = {"loss" : loss.item(),
-                        "encoder_neg/recon_loss_": recon_loss.mean().item(),
-                        "encoder_neg/sigma_": sigma.mean().item(),
-                        "encoder_neg/latent_energy_": latent_energy.mean().item()}
-        else:
-            d_logging = {"loss" : loss.item(),
-                        "encoder/recon_loss_": recon_loss.mean().item(),
-                        "encoder/sigma_": sigma.mean().item(),
-                        "encoder/latent_energy_": latent_energy.mean().item()}
-        return d_logging
-    def neg_log_prob(self, x, eval = False):
-        z_star = self.encoder(x)
-        z_star_detached = z_star.detach()
-        x = x.view(len(x), -1) # (B, D)
-        # sigma = self.get_sigma(z_star) # (B,)
-        recon, sigma = self.decoder.forward_with_sigma(z_star)
-        recon = recon.view(len(x), -1) # (B, D)
-        sigma = sigma.squeeze(-1)
-
-        bs = x.shape[0]
-        D = self.x_dim
-        n = self.z_dim
-        # compute recon loss
-        # recon = self.decoder(z_star).view(len(x), -1) # (B, D)
-        recon_loss = ((recon - x) ** 2).sum(dim = 1) / (2 * (sigma ** 2)) # (B,)
-        sigma_loss = D * torch.log(sigma) # (B,)
-        # compute jacobian
-        J = jacobian_of_f(partial(self.scaled_displacement, x = x.repeat(n, 1)), z_star_detached, create_graph=True)
-        # compute hessian
-        compute_batch_hessian = vmap(hessian(self.function_for_hessian, argnums = 0), in_dims = (0, 0))
-        hess = compute_batch_hessian(z_star_detached, x) # (B, n, n)
-        # compute log det and latent energy
-        if self.normalize:
-            # Find T, orthonormal basis of tangent space
-            A = torch.randn(bs, n, n).to(z_star_detached)
-            A[:, :, 0] = z_star_detached
-            Q, _ = torch.linalg.qr(A)
-            T = Q[:, :, 1:]
-
-            JT = J@T
-            G_eff = JT.permute(0, 2, 1)@JT #+ self.epsilon* torch.eye(n-1).to(z_star_detached)
-            hess_eff = T.permute(0, 2, 1)@hess@T
-            log_det = torch.logdet(G_eff) / 2
-            exlude_index = torch.isnan(log_det) | torch.isinf(log_det)
-            log_det[exlude_index] = 0
-            latent_energy = torch.zeros(bs).to(z_star_detached)
-            Trace_hess = vmap(torch.trace)(torch.linalg.solve(G_eff, hess_eff)) # (B, )
-            Trace_hess[exlude_index] = 0
-        else:
-            G = J.permute(0, 2, 1)@J + torch.eye(n).to(z_star_detached)
-            log_det = torch.logdet(G) / 2 
-            latent_energy = (z_star ** 2).sum(dim = 1) / 2
-            Trace_hess = vmap(torch.trace)(torch.linalg.solve(G, hess)) # (B, )
-
-        second_order_loss = Trace_hess/2
-        reg_loss = relaxed_distortion_measure(self.decoder, z_star_detached, create_graph=True)
-        constant_term = D/2 * torch.log(2*torch.tensor(np.pi)).to(z_star_detached)
-        if not eval:
-            neg_log_prob = (recon_loss + sigma_loss  + log_det + latent_energy + second_order_loss + constant_term)/D # +  + x+ 10* + reg_loss
-        else:
-            neg_log_prob = (recon_loss + sigma_loss + log_det + latent_energy + second_order_loss + constant_term)/D #  + log_det + latent_energy + second_order_loss + constant_term
-        # neg_log_prob[failed_index] = 0
+        neg_log_prob = (recon_loss + latent_energy + logdet_loss + sigma_loss)/D
 
         d_return = {"neg_log_prob": neg_log_prob,
                     "recon_loss": recon_loss,
                    "latent_energy": latent_energy,
-                    "log_det": log_det,
-                    "second_order_loss": second_order_loss,
+                    "log_det": logdet_loss,
                     "sigma": sigma}
-        
-        if not eval:
-            d_return["reg_loss"] = reg_loss
+
         return d_return
-        #     d_return
     
 
     def visualization_step(self, dl, procedure, **kwargs):
@@ -497,7 +277,7 @@ class EnergyAE(nn.Module):
         x_img = make_grid(x.detach().cpu(), nrow=num_each_axis, value_range=(0, 1), pad_value=1)
         recon_img = make_grid(recon.detach().cpu(), nrow=num_each_axis, value_range=(0, 1), pad_value=1)
         if procedure == 'train_energy' or procedure == "train":
-            sampled_x = self.sample(batch_size=x.shape[0],  device=device, apply_noise=True)
+            sampled_x = self.sample(batch_size=x.shape[0],  device=device)
             sampled_img = make_grid(sampled_x.detach().cpu(), nrow=num_each_axis, value_range=(0, 1), pad_value=1)
         
         if z_star.shape[1] == 3:

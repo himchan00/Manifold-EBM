@@ -4,51 +4,20 @@ logger:
   endwith: ['@']
 model:
   arch: eae 
-  sigma:
-    arch: fc_vec
-    l_hidden:  [1024, 1024, 1024, 1024]
-    activation: ['relu', 'relu', 'relu', 'relu']
-    out_activation: 'linear'
-    img_size: [1, 28, 28]
-    out_chan_num: 1
-  # decoder:
-  #   arch: fc_image
-  #   l_hidden:  [1024, 1024, 1024, 1024,]
-  #   activation: ['relu', 'relu', 'relu', 'relu', ]
-  #   out_activation: 'sigmoid'
-  #   img_size: [1, 28, 28]
-  #   out_chan_num: 1
-  # encoder: 
-  #   arch: conv2fc 
-  #   nh: 8
-  #   nh_mlp: 1024
-  #   out_activation: linear 
-  # decoder:
-  #   arch: deconv2
-  #   nh: 8
-  #   out_activation: sigmoid 
-  #   sig_min: 0.01
-  #   sig_max: 0.1
-  # sigma:
-  #   arch: conv28
-  #   activation: relu
-  #   out_activation: linear
-  # energy:
-  #   arch: fc_image
-  #   l_hidden: [1024, 1024, 1024, 1024, 1024] # [256, 256, 256, 256]
-  #   activation: ['relu', 'relu', 'relu', 'relu', 'relu']
-  #   out_activation: 'linear'
-  #   out_chan_num: 1
+  encoder: 
+    arch: conv2fc 
+    nh: 8
+    nh_mlp: 1024
+    out_activation: linear 
+  decoder:
+    arch: deconv2
+    nh: 8
+    out_activation: sigmoid 
   x_dim: 784
   z_dim: 16
-  min_sigma: 0.01
-  max_sigma: 0.1
   energy_ae:
-    sigma_sq: 0.5
-    normalize: False
-    sigma_train: 'decoder'
-    epsilon: 1e-3
-    gamma: 0.1
+    z_dim: 16
+    max_latent_variance: 0.1
 data:
   training:
     dataset: MNIST

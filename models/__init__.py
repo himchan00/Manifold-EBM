@@ -86,8 +86,6 @@ def get_ae(**model_cfg):
     x_dim = model_cfg['x_dim']
     z_dim = model_cfg['z_dim']
     arch = model_cfg["arch"]
-    min_sigma = model_cfg["min_sigma"]
-    max_sigma = model_cfg["max_sigma"]
     if arch == "vae":
         encoder = get_net(in_dim=x_dim, out_dim=z_dim * 2, **model_cfg["encoder"])
         decoder = get_net(in_dim=z_dim, out_dim=x_dim, **model_cfg["decoder"])
@@ -105,18 +103,7 @@ def get_ae(**model_cfg):
         decoder = FC_for_decoder_and_sigma(z_dim=z_dim, x_dim=x_dim)
         # encoder = get_net(in_dim=x_dim, out_dim=z_dim, **model_cfg["encoder"])
         # decoder = get_net(in_dim=z_dim, out_dim=x_dim, **model_cfg["decoder"])
-        sigma = None
-        if model_cfg["energy_ae"]["sigma_train"] == "sigma":
-            sigma_net = get_net(in_dim=784, out_dim=1, **model_cfg["sigma"])
-            sigma = sigma_net_normalizer(sigma_net, min_sigma, max_sigma)
-        # elif model_cfg["energy_ae"]["sigma_train"] == "encoder":
-        #     encoder = sigma_net_normalizer(encoder, min_sigma, max_sigma)
-        # elif model_cfg["energy_ae"]["sigma_train"] == "decoder":
-        #     decoder = sigma_net_normalizer(decoder, min_sigma, max_sigma)
-        
-        if model_cfg["energy_ae"]["normalize"]:
-            encoder = normalized_net(encoder)
-        model = EnergyAE(encoder = encoder, decoder = decoder, sigma = sigma,**model_cfg["energy_ae"])
+        model = EnergyAE(encoder = encoder, decoder = decoder, **model_cfg["energy_ae"])
     return model
 
 def get_model(cfg, *args, version=None, **kwargs):
