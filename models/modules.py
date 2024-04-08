@@ -426,73 +426,7 @@ class DeConvNet28(nn.Module):
         x = self.net(x)
         return x
 
-class energy_net(nn.Module):
-    def __init__(self, encoder, decoder, nh_mlp=512, n_layers = 3):
-        super().__init__()
-        self.encoder = encoder
-        self.decoder = decoder
-        l_layer = []
-        for _ in range(n_layers-1):
-            l_layer.append(nn.Linear(nh_mlp, nh_mlp))
-            l_layer.append(nn.ReLU())
-        l_layer.append(nn.Linear(nh_mlp, 1))
-        self.fc_nets = nn.Sequential(*l_layer)
 
-    def forward_for_energy(self, z):
-        x_bar = self.decoder(z)
-        x = self.encoder.get_feature(x_bar, grad=True).squeeze(2).squeeze(2)
-        x = self.fc_nets(x)
-        return x
-    def forward(self, z, grad = True):
-        with torch.no_grad():
-            x_bar = self.decoder(z)
-        x = self.encoder.get_feature(x_bar, grad=grad).squeeze(2).squeeze(2)
-        x = self.fc_nets(x)
-        return x
-    def forward_with_x(self, x, grad=True):
-        x = self.encoder.get_feature(x, grad=grad).squeeze(2).squeeze(2)
-        x = self.fc_nets(x)
-        return x
-
-class sigma_net(nn.Module):
-    def __init__(self, net, minimizer_target, decoder_target, min_sigma_sq = 1e-4, max_sigma_sq = 1e-2):
-        super().__init__()
-        # self.net = nn.Linear(1024, 1)
-        self.net = net
-        self.decoder_target = decoder_target
-        self.minimizer_target = minimizer_target
-        self.min = torch.log(torch.tensor(min_sigma_sq))
-        self.max = torch.log(torch.tensor(max_sigma_sq))
-        self.min.requires_grad = False
-        self.max.requires_grad = False
-
-    def forward(self, z):
-        x = self.decoder_target(z)
-        x = x.view(x.size(0), -1)
-        x = self.minimizer_target.get_feature(x)
-        x = self.net(x)
-        x = torch.sigmoid(x)
-        x = torch.exp(self.min + (self.max - self.min) * x)
-        return x
-
-    def forward_with_x(self, x):
-        if len(x.size()) == 4:
-            x = x.view(x.size(0), -1)
-        x = self.minimizer_target.get_feature(x)
-        x = self.net(x)
-        x = torch.sigmoid(x)
-        x = torch.exp(self.min + (self.max - self.min) * x)
-        return x
-
-class new_sigma_net(nn.Module):
-    def __init__(self, net):
-        super().__init__()
-        self.net = net
-    
-    def forward(self, z):
-        x = self.net(z)
-        x = torch.exp(x)
-        return x
 
 class ConvNet2FC(nn.Module):
     """additional 1x1 conv layer at the top"""
@@ -503,14 +437,16 @@ class ConvNet2FC(nn.Module):
         self.conv2 = nn.Conv2d(nh * 4, nh * 8, kernel_size=3, bias=True)
         self.max1 = nn.MaxPool2d(kernel_size=2, stride=2)
         self.conv3 = nn.Conv2d(nh * 8, nh * 8, kernel_size=3, bias=True)
-        self.conv4 = nn.Conv2d(nh * 8, nh * 16, kernel_size=3, bias=True)
+        self.conv4_e = nn.Conv2d(nh * 8, nh * 16, kernel_size=3, bias=True)
         self.max2 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.conv5 = nn.Conv2d(nh * 16, nh_mlp, kernel_size=4, bias=True)
-        self.conv6 = nn.Conv2d(nh_mlp, out_chan, kernel_size=1, bias=True)
+        self.conv5_e = nn.Conv2d(nh * 16, nh_mlp, kernel_size=4, bias=True)
+        self.conv6_e = nn.Conv2d(nh_mlp, out_chan, kernel_size=1, bias=True)
         self.in_chan, self.out_chan = in_chan, out_chan
         self.out_activation = get_activation(out_activation)
 
-        self.conv_sigma = nn.Conv2d(nh_mlp, 1, kernel_size=1, bias=True)
+        self.conv4_s = nn.Conv2d(nh * 8, nh * 16, kernel_size=3, bias=True)
+        self.conv5_s = nn.Conv2d(nh * 16, nh_mlp, kernel_size=4, bias=True)
+        self.conv6_s = nn.Conv2d(nh_mlp, 1, kernel_size=1, bias=True)
 
         layers = [self.conv1,
                   nn.ReLU(),
@@ -519,12 +455,12 @@ class ConvNet2FC(nn.Module):
                   self.max1,
                   self.conv3,
                   nn.ReLU(),
-                  self.conv4,
+                  self.conv4_e,
                   nn.ReLU(),
                   self.max2,
-                  self.conv5,
+                  self.conv5_e,
                   nn.ReLU(),
-                  self.conv6,]
+                  self.conv6_e,]
         if self.out_activation is not None:
             layers.append(self.out_activation)
 
@@ -542,26 +478,31 @@ class ConvNet2FC(nn.Module):
         x = self.max1(x)
         x = self.conv3(x)
         x = F.relu(x)
-        x = self.conv4(x)
-        x = F.relu(x)
-        x = self.max2(x)
-        x = self.conv5(x)
-        x = F.relu(x)
-        x_e = self.conv6(x)
-        x_s = self.conv_sigma(x)
+
+        x_e = self.conv4_e(x)
+        x_e = F.relu(x_e)
+        x_e = self.max2(x_e)
+        x_e = self.conv5_e(x_e)
+        x_e = F.relu(x_e)
+        x_e = self.conv6_e(x_e)
+
+        x_s = self.conv4_s(x)
+        x_s = F.relu(x_s)
+        x_s = self.max2(x_s)
+        x_s = self.conv5_s(x_s)
+        x_s = F.relu(x_s)
+        x_s = self.conv6_s(x_s)
         if self.out_activation is not None:
             x_e = self.out_activation(x_e)
         x_e = x_e.squeeze(2).squeeze(2)
         x_s = x_s.squeeze(2).squeeze(2)
-        x_s = torch.sigmoid(x_s)
         x_s = torch.exp(x_s)
         return x_e, x_s.squeeze(-1)
 
 
 
 class DeConvNet2(nn.Module):
-    def __init__(self, in_chan=1, out_chan=1, nh=8, out_activation='linear',
-                 use_spectral_norm=False, sig_min = 1e-2, sig_max = 0.1):
+    def __init__(self, in_chan=1, out_chan=1, nh=8, out_activation='linear'):
         """nh: determines the numbers of conv filters"""
         super(DeConvNet2, self).__init__()
         self.conv1 = nn.ConvTranspose2d(in_chan, nh * 16, kernel_size=4, bias=True)
@@ -593,55 +534,3 @@ class DeConvNet2(nn.Module):
             x = self.out_activation(x)
         return x
 
-
-class DeConvNet3(nn.Module):
-    def __init__(self, in_chan=1, out_chan=1, nh=8, out_activation='linear',
-                 use_spectral_norm=False):
-        """nh: determines the numbers of conv filters"""
-        super(DeConvNet3, self).__init__()
-        self.conv1 = nn.ConvTranspose2d(in_chan, nh * 16, kernel_size=4, bias=True)
-        self.conv2 = nn.ConvTranspose2d(nh * 16, nh * 8, kernel_size=3, bias=True)
-        self.conv3 = nn.ConvTranspose2d(nh * 8, nh * 8, kernel_size=3, bias=True)
-        self.conv4 = nn.ConvTranspose2d(nh * 8, nh * 4, kernel_size=3, bias=True)
-        self.conv5 = nn.ConvTranspose2d(nh * 4, out_chan, kernel_size=3, bias=True)
-        self.in_chan, self.out_chan = in_chan, out_chan
-        self.out_activation = get_activation(out_activation) 
-
-
-    def forward(self, x):
-        if len(x.size()) == 4:
-            pass
-        else:
-            x = x.unsqueeze(2).unsqueeze(2)
-        x = self.conv1(x)
-        x = F.relu(x)
-        x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
-        x = self.conv2(x)
-        x = F.relu(x)
-        x = self.conv3(x) # (bs, 64, 12, 12)
-        x = F.relu(x)
-        x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
-        x = self.conv4(x) # (bs, 32, 26, 26)
-        x = F.relu(x)
-        x = self.conv5(x) # (bs, 1, 28, 28)
-        if self.out_activation is not None:
-            x = self.out_activation(x)
-        return x
-    
-    def get_feature(self, x):
-        if len(x.size()) == 4:
-            pass
-        else:
-            x = x.unsqueeze(2).unsqueeze(2)
-        x = self.conv1(x)
-        x = F.relu(x)
-        x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
-        x = self.conv2(x)
-        x = F.relu(x)
-        x = self.conv3(x)
-        x = F.relu(x)
-        x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
-        x = self.conv4(x)
-        x = F.relu(x)
-
-        return x

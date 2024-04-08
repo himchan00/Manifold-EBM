@@ -13,7 +13,7 @@ model:
     arch: deconv2
     nh: 8
     out_activation: sigmoid 
-  x_dim: 784
+  x_dim: 1 # 1 when using conv arch, 784 when using fc arch
   z_dim: 16
   energy_ae:
     z_dim: 16

@@ -1,128 +1,19 @@
 import numpy as np
 import torch
 import torch.nn as nn
-import copy
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
-from functools import partial
 from matplotlib import cm
-from functorch import hessian, vmap, jacrev
+from functorch import hessian, vmap
 from torchvision.utils import make_grid
 from utils.utils import label_to_color, figure_to_array, PD_metric_to_ellipse
 from geometry import (
-    relaxed_volume_preserving_measure,
     get_pullbacked_Riemannian_metric,
     get_flattening_scores,
-    get_log_det_jacobian,
     jacobian_of_f,
-    spherical_jacobian_of_f,
     relaxed_distortion_measure,
-    get_log_det_jacobian_new,
-    get_projection_coord_rep,
-    conformal_distortion_measure,
-    curvature_reg,
 )
-import scipy
 
-class neg_log_approx(torch.autograd.Function):
-    """
-    f(x) = -log(1 - x) when x < 0, x + x**2/2 + x**3/3 + x**4/4 when x >= 0
-    """
-    @staticmethod
-    def forward(ctx, input):
-        ctx.save_for_backward(input)
-        index = input < 0
-        output = torch.zeros_like(input)
-        output[index] = -torch.log(1 - input[index])
-        output[~index] = input[~index] + input[~index]**2/2 + input[~index]**3/3 + input[~index]**4/4
-        return output
-    
-    @staticmethod
-    def backward(ctx, grad_output):
-        input, = ctx.saved_tensors
-        grad_input = torch.zeros_like(input)
-        index = input < 0
-        grad_input[index] = 1/(1 - input[index])
-        grad_input[~index] = 1 + input[~index] + input[~index]**2 + input[~index]**3
-        return grad_output * grad_input
-    
-class erfi(torch.autograd.Function):
-    
-    @staticmethod
-    def forward(ctx, input):
-        ctx.save_for_backward(input)
-        input_npy = input.detach().cpu().numpy()
-        output_npy = scipy.special.erfi(input_npy)
-        return torch.as_tensor(output_npy, dtype=input.dtype).to(input.device)
-    
-    @staticmethod
-    def backward(ctx, grad_output):
-        input, = ctx.saved_tensors
-        grad_input = 2 * torch.exp(input ** 2) / (np.pi ** 0.5)
-        return grad_output * grad_input
-    
-class dawson(torch.autograd.Function):
-    """
-    dawson(x) = exp(-x^2) erfi(x) * sqrt(pi) / 2
-    """
-
-    @staticmethod
-    def forward(ctx, input):
-        ctx.save_for_backward(input)
-        input_npy = input.detach().cpu().numpy()
-        output_npy = scipy.special.dawsn(input_npy)
-        return torch.as_tensor(output_npy, dtype=input.dtype).to(input.device)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        input, = ctx.saved_tensors
-        input_npy = input.detach().cpu().numpy()
-        grad_input_npy = -2 * input_npy * scipy.special.dawsn(input_npy) + 1
-        grad_input = torch.as_tensor(grad_input_npy, dtype=input.dtype).to(input.device)
-        return grad_output * grad_input
-    
-class erfcx(torch.autograd.Function):
-    """
-    erfcx(x) = exp(x^2) erfc(x)
-    """
-
-    @staticmethod
-    def forward(ctx, input):
-        ctx.save_for_backward(input)
-        input_npy = input.detach().cpu().numpy()
-        output_npy = scipy.special.erfcx(input_npy)
-        return torch.as_tensor(output_npy, dtype=input.dtype).to(input.device)
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        input, = ctx.saved_tensors
-        input_npy = input.detach().cpu().numpy()
-        grad_input_npy = 2 * input_npy * scipy.special.erfcx(input_npy) - 2 / np.pi ** 0.5
-        grad_input = torch.as_tensor(grad_input_npy, dtype=input.dtype).to(input.device)
-        return grad_output * grad_input
-
-
-def jacobian(output, input_tensor):
-    """
-    Calculate the Jacobian matrix.
-
-    Args:
-        output (torch.Tensor): Output tensor of shape (bs, n).
-        input_tensor (torch.Tensor): Input tensor of shape (bs, m).
-
-    Returns:
-        torch.Tensor: Jacobian matrix of shape (bs, n, m).
-    """
-    bs, n = output.shape
-    _, m = input_tensor.shape
-    jac = torch.zeros(bs, n, m).to(output)
-
-    for i in range(n):
-        grad_output_i = torch.zeros_like(output)
-        grad_output_i[:, i] = 1.0
-        jac[:, i, :] = torch.autograd.grad(output, input_tensor, grad_outputs=grad_output_i, retain_graph=True)[0]
-
-    return jac
 
 class AE(nn.Module):
     def __init__(self, encoder, decoder):
@@ -167,6 +58,8 @@ class EnergyAE(nn.Module):
         self.decoder = decoder
         self.z_dim = z_dim
         self.max_latent_variance = torch.tensor(max_latent_variance)
+        self.mean = torch.tensor(-2)
+        self.std = torch.tensor(1)
 
 
     def sample(self, batch_size, device):
@@ -191,8 +84,8 @@ class EnergyAE(nn.Module):
         z = z.unsqueeze(0) # (1, n)
         x_star = self.decoder(z).view(1, -1) # (1, D)
         d = (x - x_star) / sigma.unsqueeze(1) # (1, D)
-        d_detached = d.detach() 
-        return (d_detached @ d.T).squeeze()
+        # d_detached = d.detach() 
+        return (d @ d.T/2).squeeze()
     
         
     def train_step(self, x, optimizer, **kwargs):
@@ -207,12 +100,15 @@ class EnergyAE(nn.Module):
 
         optimizer.step()
         
-        d_logging = d_train
-        d_logging["loss"] = loss.item()
-        return d_logging
+        d_return = {"loss": loss.item()}
+        for key, val in d_train.items():
+            key = "train/" + key + "_"
+            d_return[key] = val.mean().item()
+        return d_return
 
     def neg_log_prob(self, x, n_eval = 1):
-        z_star, sigma = self.encoder.forward_with_sigma(x)
+        z_star, sigma = self.encoder.forward_with_sigma(x) # (B, n), (B,)
+        # sigma = torch.exp(self.mean + self.std * eta) # (B,)
         x = x.view(len(x), -1) # (B, D)
 
         bs = x.shape[0]
@@ -220,23 +116,24 @@ class EnergyAE(nn.Module):
         n = z_star.shape[1]
         
         # compute jacobian
-        J = jacobian_of_f(self.decoder, z_star, create_graph=True)
+        # J = jacobian_of_f(self.decoder, z_star, create_graph=True)
         # compute hessian
         compute_batch_hessian = vmap(hessian(self.function_for_hessian, argnums = 0), in_dims = (0, 0, 0))
         hess = compute_batch_hessian(z_star, x, sigma.unsqueeze(1)) # (B, n, n)
         # compute precision matrix
-        Precision = J.permute(0, 2, 1)@J/((sigma**2).unsqueeze(1).unsqueeze(2)) + torch.eye(n).to(z_star) + hess
+        Precision = torch.eye(n).to(z_star) + hess
         # Find minimum eigenvalue
         eigvals = torch.linalg.eigvalsh(Precision)
         eigvals_min = torch.min(eigvals, dim = 1).values # (B,)
         
         # Insure that eigenvalues of precision matrix are greater than 1/max_latent_variance
-        delta = 1/self.max_latent_variance - eigvals_min # (B,)
+        delta = torch.maximum(1/self.max_latent_variance - eigvals_min, torch.zeros_like(eigvals_min))
         Precision = Precision + torch.eye(n).to(z_star).repeat(bs, 1, 1) * delta.unsqueeze(1).unsqueeze(2)
         eigvals = eigvals + delta.unsqueeze(1)
 
         # posterior sampling
         L = torch.linalg.cholesky(Precision, upper = True)
+        # print(torch.linalg.eigvalsh(Precision)) 
         eps = torch.randn((n_eval, bs, n)).to(z_star)
         z_sample = z_star.unsqueeze(0) + torch.linalg.solve(L.unsqueeze(0), eps.unsqueeze(-1)).squeeze(-1) # (n_eval, B, n)
 
@@ -252,7 +149,7 @@ class EnergyAE(nn.Module):
         logdet_loss = torch.log(eigvals).sum(dim = 1)/2 # (B,)
 
         # compute sigma_loss
-        sigma_loss = D * torch.log(sigma) # (B,)
+        sigma_loss = D * torch.log(sigma) # + (eta ** 2).sum(dim = 1) /2 # (B,)
         neg_log_prob = (recon_loss + latent_energy + logdet_loss + sigma_loss)/D
 
         d_return = {"neg_log_prob": neg_log_prob,
