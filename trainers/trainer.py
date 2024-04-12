@@ -25,14 +25,34 @@ class BaseTrainer:
         # model.encoder.load_state_dict(torch.load(f"pretrained/encoder_ho_1_unnorm.pth"))
         # model.decoder.load_state_dict(torch.load(f"pretrained/decoder_ho_1_unnorm.pth"))
         # model.minimizer.load_state_dict(torch.load(f"pretrained/minimizer_ho_1_lr_1e-4_original.pth"))
+        sigma_params = []
+        # sigma_name_list = ["fc4_s.weight", "fc5_s.weight", "fc6_s.weight", "fc4_s.bias", "fc5_s.bias", "fc6_s.bias"]
+        sigma_name_list = ["conv4_s.weight", "conv5_s.weight", "conv6_s.weight", "conv4_s.bias", "conv5_s.bias", "conv6_s.bias"]
+        for name, param in model.encoder_target.named_parameters():
+            if name in sigma_name_list:
+                print(f"{name} added to sigma_params")
+                sigma_params.append(param)
 
+        optimizer = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
+                        {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
+                        {'params': sigma_params, 'lr':cfg.optimizer['lr_sigma']},
+                        ])
 
         for i_epoch in range(1, cfg['n_epoch'] + 1):
             for x, _ in train_loader:
                 model.train()
                 start_ts = time.time()
 
-                d_train_t = model.train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
+                d_train_t = model.train_step(x.to(self.device), optimizer=optimizer, **kwargs)
+
+                # update target encoder
+                tau = 0.005
+                for (name, param), param_target in zip(model.encoder.named_parameters(), model.encoder_target.parameters()):
+                    if name in sigma_name_list:
+                        pass
+                    else:
+                        param_target.data = param_target.data * (1.0 - tau) + param.data * tau
+
                     
 
                 time_meter.update(time.time() - start_ts)
@@ -101,7 +121,7 @@ class BaseTrainer:
             with torch.no_grad():
                 if flatten:
                     x = x.view(len(x), -1)
-                pred = m.neg_log_prob(x.cuda(device), n_eval = 10)
+                pred = m.neg_log_prob(x.cuda(device), n_eval = 10, train = False)
 
             for key, val in pred.items():
                 if key in l_result:

@@ -17,7 +17,7 @@ model:
   z_dim: 16
   energy_ae:
     z_dim: 16
-    max_latent_variance: 0.1
+    max_latent_variance: 1.0
 data:
   training:
     dataset: MNIST

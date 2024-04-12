@@ -155,9 +155,8 @@ class FC_for_decoder_and_sigma(nn.Module):
         x_s = self.fc5_s(x_s)
         x_s = F.relu(x_s)
         x_s = self.fc6_s(x_s)
-        x_s = torch.sigmoid(x_s)
-        x_s = torch.exp(torch.log(self.sig_min) + (torch.log(self.sig_max) - torch.log(self.sig_min)) * x_s)
-        return x_s
+        x_s = torch.exp(x_s)
+        return x_s.squeeze(-1)
     
     def forward_with_sigma(self, z):
         x = self.fc1(z)
@@ -181,8 +180,7 @@ class FC_for_decoder_and_sigma(nn.Module):
         x_s = self.fc5_s(x_s)
         x_s = F.relu(x_s)
         x_s = self.fc6_s(x_s)
-        x_s = torch.sigmoid(x_s)
-        x_s = torch.exp(torch.log(self.sig_min) + (torch.log(self.sig_max) - torch.log(self.sig_min)) * x_s)
+        x_s = torch.exp(x_s)
         return x_d, x_s.squeeze(-1)
 
 class FC_for_encoder_and_sigma(nn.Module):
@@ -203,8 +201,6 @@ class FC_for_encoder_and_sigma(nn.Module):
         self.fc5_s = nn.Linear(1024, 1024)
         self.fc6_s = nn.Linear(1024, 1)
 
-        # self.sig_min = 1e-3
-        # self.sig_max = 10
     def forward(self, z):
         if len(z.size()) == 4:
             z = z.view(z.size(0), -1)
@@ -238,10 +234,8 @@ class FC_for_encoder_and_sigma(nn.Module):
         x_s = self.fc5_s(x_s)
         x_s = F.relu(x_s)
         x_s = self.fc6_s(x_s)
-        # x_s = torch.sigmoid(x_s)
-        # x_s = torch.exp(torch.log(self.sig_min) + (torch.log(self.sig_max) - torch.log(self.sig_min)) * x_s)
         x_s = torch.exp(x_s)
-        return x_s
+        return x_s.squeeze(-1)
     
     def forward_with_sigma(self, x):
         if len(x.size()) == 4:
@@ -470,6 +464,28 @@ class ConvNet2FC(nn.Module):
     def forward(self, x):
         return self.net(x).squeeze(2).squeeze(2)
 
+    def sigma(self, x):
+        if len(x.size()) == 2:
+            D = x.size(1)
+            x = x.view(-1, 1, int(np.sqrt(D)), int(np.sqrt(D)))
+        x = self.conv1(x)
+        x = F.relu(x)
+        x = self.conv2(x)
+        x = F.relu(x)
+        x = self.max1(x)
+        x = self.conv3(x)
+        x = F.relu(x)
+
+        x_s = self.conv4_s(x)
+        x_s = F.relu(x_s)
+        x_s = self.max2(x_s)
+        x_s = self.conv5_s(x_s)
+        x_s = F.relu(x_s)
+        x_s = self.conv6_s(x_s)
+        x_s = x_s.squeeze(2).squeeze(2)
+        x_s = torch.exp(x_s)
+        return x_s.squeeze(-1)
+    
     def forward_with_sigma(self, x):
         x = self.conv1(x)
         x = F.relu(x)
