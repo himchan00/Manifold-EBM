@@ -17,12 +17,12 @@ model:
   z_dim: 16
   energy_ae:
     z_dim: 16
-    max_latent_variance: 1
+    max_latent_variance: 100
 data:
   training:
     dataset: MNIST
     root: dataset
-    batch_size: 256
+    batch_size: 128
     n_workers: 4
     split: training
     shuffle: True
@@ -30,7 +30,7 @@ data:
   validation:
     dataset: MNIST
     root: dataset
-    batch_size: 256
+    batch_size: 128
     n_workers: 4
     split: validation
     shuffle: False
@@ -38,7 +38,7 @@ data:
   test:
     dataset: MNIST
     root: dataset
-    batch_size: 256
+    batch_size: 128
     n_workers: 4
     split: test
     shuffle: False
@@ -46,7 +46,7 @@ data:
   OOD_validation:
     dataset: MNIST
     root: dataset
-    batch_size: 256
+    batch_size: 128
     n_workers: 4
     split: validation
     shuffle: False
@@ -54,7 +54,7 @@ data:
   OOD_test:
     dataset: MNIST
     root: dataset
-    batch_size: 256
+    batch_size: 128
     n_workers: 4
     split: test
     shuffle: False
@@ -62,7 +62,7 @@ data:
   
 trainer: base
 training:
-  n_epoch: 1500
+  n_epoch: 500
   n_epoch_pre: 100
   n_epoch_ebm: 30
   fix_decoder: false
@@ -72,8 +72,8 @@ training:
   optimizer:
     lr_encoder: 1e-4
     lr_decoder: 1e-4
-    lr_constant: 1e-3
-    lr_sigma: 1e-4
+    lr_energy: 1e-4
+    lr_sigma: 1e-3
   print_interval: 200
   val_interval: 200
   visualize_interval: 200

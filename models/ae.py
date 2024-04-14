@@ -2,6 +2,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import copy
+from functools import partial
+from torch.autograd.functional import jacobian
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from matplotlib import cm
@@ -60,6 +62,8 @@ class EnergyAE(nn.Module):
         self.decoder = decoder
         self.z_dim = z_dim
         self.max_latent_variance = torch.tensor(max_latent_variance)
+        self.log_sig_paral = nn.Parameter(torch.zeros(1, requires_grad=True))
+        self.log_sig_vert = nn.Parameter(torch.zeros(1, requires_grad=True))
 
 
     def sample(self, batch_size, device):
@@ -71,8 +75,31 @@ class EnergyAE(nn.Module):
         
         return x
     
+    def recon_loss(self, x, z):
+        """
+        x : (B, D)
+        z : (B, n)
+        """
+        D = x.shape[1]
+        n = z.shape[1]
+        x_star, sigma = self.decoder.forward_with_sigma(z)
+        x_star = x_star.view(-1, D)
+        sigma_paral = sigma[:, 0]
+        sigma_vert = sigma[:, 1]
+        J = jacobian_of_f(self.decoder, z, create_graph=True)
+        G = J.permute(0, 2, 1) @ J
+        P = J @ torch.linalg.solve(G, J.permute(0, 2, 1))
+        delta_x = (x - x_star) # (B, D)
+        delta_x_paral = (P @ delta_x.unsqueeze(-1)).squeeze(-1) # (B, D)
+        delta_x_vert = delta_x - delta_x_paral # (B, D)
+        loss = ((delta_x_paral/sigma_paral.unsqueeze(-1)) ** 2 + (delta_x_vert/sigma_vert.unsqueeze(-1)) ** 2).sum(dim = 1)/2 # (B,)
+        loss += n * torch.log(sigma_paral) + (D-n) * torch.log(sigma_vert)
+        return loss, sigma_paral, sigma_vert
+    
+    def get_sum_of_gradients(self, x, z):
+        return torch.autograd.grad(partial(self.recon_loss, x)(z)[0].sum(), z, create_graph=True)[0].sum(0)
 
-    def function_for_hessian(self, z, x):
+    def function_for_hessian(self, z, x, d_para, d_vert):
         """
         caculate d.detach().T @ d
         x : (D)
@@ -83,12 +110,11 @@ class EnergyAE(nn.Module):
         x = x.unsqueeze(0) # (1, D)
         D = x.shape[1]
         z = z.unsqueeze(0) # (1, n)
-        # x_star = self.decoder(z).view(-1, D) # (1, D)
-        x_star, sigma = self.decoder.forward_with_sigma(z)
-        x_star = x_star.view(-1, D) # (1, D)
-        # sigma = self.encoder_target.sigma(x_star) # (1,)
-        d = (x - x_star) / sigma.unsqueeze(1) # (1, D)
-        out = (d @ d.T/2 + D*torch.log(sigma) + (z**2).sum(dim = 1)/2).squeeze() # (,)
+        x_star = self.decoder(z).view(-1, D) # (1, D)
+        delta_x = (x - x_star) # (1, D)
+        sigma_paral = torch.exp(self.log_sig_paral)
+        sigma_vert = torch.exp(self.log_sig_vert)
+        out = delta_x @ (d_para.T/sigma_paral ** 2 +  d_vert.T/sigma_vert ** 2) # (1, )
         return out
     
         
@@ -111,7 +137,7 @@ class EnergyAE(nn.Module):
         return d_return
 
     def neg_log_prob(self, x, n_eval = 1, train = True):
-        z_star, sigma = self.encoder.forward_with_sigma(x) # (B, n)
+        z_star  = self.encoder(x) # (B, n)
         x = x.view(len(x), -1) # (B, D)
 
         bs = x.shape[0]
@@ -119,12 +145,13 @@ class EnergyAE(nn.Module):
         n = z_star.shape[1]
         
         # compute hessian
-        compute_batch_hessian = vmap(hessian(self.function_for_hessian, argnums = 0), in_dims = (0, 0))
-        hess = compute_batch_hessian(z_star, x) # (B, n, n)
+        # compute_batch_hessian = vmap(hessian(self.function_for_hessian, argnums = 0), in_dims = (0, 0))
+        # hess = compute_batch_hessian(z_star, x) # (B, n, n)
+        hess = jacobian(partial(self.get_sum_of_gradients, x), z_star.detach(), vectorize=True).swapaxes(0, 1) + torch.eye(n).to(z_star).repeat(bs, 1, 1)
         # Find minimum eigenvalue
         eigvals = torch.linalg.eigvalsh(hess)
-        # print("Hessian eigenvalues:")
-        # print(eigvals[0, :])
+        print("Hessian eigenvalues:")
+        print(eigvals[0, :])
         eigvals_min = torch.min(eigvals, dim = 1).values # (B,)
         delta = torch.maximum(1/self.max_latent_variance- eigvals_min, torch.zeros_like(eigvals_min))
         Precision = hess + torch.eye(n).to(z_star).repeat(bs, 1, 1) * delta.unsqueeze(1).unsqueeze(2)
@@ -133,15 +160,13 @@ class EnergyAE(nn.Module):
         L = torch.linalg.cholesky(Precision, upper = True)
         eps = torch.randn((n_eval, bs, n)).to(z_star)
         z_sample = z_star.unsqueeze(0) + torch.linalg.solve_triangular(L.unsqueeze(0), eps.unsqueeze(-1), upper = True).squeeze(-1) # (n_eval, B, n)
-        recon, sigma = self.decoder.forward_with_sigma(z_sample.view(-1, n))
-        # sigma = self.encoder_target.sigma(recon) # (n_eval * B,)
-        recon = recon.view(-1, D) # (n_eval * B, D)
 
         # compute recon loss
         x = x.repeat(n_eval, 1) # (n_eval * B, D)
-
-        recon_loss = (((recon - x)/sigma.unsqueeze(1)) ** 2).sum(dim = 1)/ 2 # (n_eval * B,)
+        recon_loss, sigma_paral, sigma_vert = self.recon_loss(x, z_sample.view(-1, n)) # (n_eval * B,)
         recon_loss = recon_loss.view(n_eval, bs).mean(dim = 0) # (B,)
+        sigma_paral = sigma_paral.view(n_eval, bs).mean(dim = 0) # (B,)
+        sigma_vert = sigma_vert.view(n_eval, bs).mean(dim = 0) # (B,)
 
         # compute latent energy
         latent_energy = (z_star ** 2).sum(dim = 1) / 2 + (1 / eigvals).sum(dim = 1)/2
@@ -150,22 +175,23 @@ class EnergyAE(nn.Module):
         logdet_loss = torch.log(eigvals).sum(dim = 1)/2 # (B,)
 
         # compute sigma_loss
-        sigma_loss = D * torch.log(sigma) 
-        sigma_loss = sigma_loss.view(n_eval, bs).mean(dim = 0) # (B,)
+        # sigma_loss = n * self.log_sig_paral + (D-n) * self.log_sig_vert 
+        # sigma_loss = sigma_loss.repeat(bs)
         # compute scaled isometric loss
         if train:
             eig_mean = eigvals.mean(dim = 1, keepdim = True) # (B, 1)
             scaled_isometric_loss = ((eigvals/eig_mean - 1) ** 2).sum(dim = 1) # (B,)
         else:
             scaled_isometric_loss = torch.zeros_like(recon_loss)
-        neg_log_prob = (recon_loss + latent_energy + logdet_loss + sigma_loss)/D
+        neg_log_prob = (recon_loss + latent_energy + logdet_loss)/D #  + sigma_loss
 
         d_return = {"neg_log_prob": neg_log_prob,
                     "recon_loss": recon_loss,
                    "latent_energy": latent_energy,
                     "log_det": logdet_loss,
                     "scaled_isometric_loss": scaled_isometric_loss,
-                    "sigma": sigma}
+                    "sigma_paral": sigma_paral,
+                    "sigma_vert": sigma_vert}
 
         return d_return
     
