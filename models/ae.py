@@ -82,24 +82,53 @@ class EnergyAE(nn.Module):
         """
         D = x.shape[1]
         n = z.shape[1]
-        x_star, sigma = self.decoder.forward_with_sigma(z)
-        x_star = x_star.view(-1, D)
-        sigma_paral = sigma[:, 0]
-        sigma_vert = sigma[:, 1]
+        x_star = self.decoder(z).view(-1, D) # (B, D)
+        sigma_paral = torch.exp(self.log_sig_paral)
+        sigma_vert = torch.exp(self.log_sig_vert)
         J = jacobian_of_f(self.decoder, z, create_graph=True)
         G = J.permute(0, 2, 1) @ J
-        P = J @ torch.linalg.solve(G, J.permute(0, 2, 1))
         delta_x = (x - x_star) # (B, D)
-        delta_x_paral = (P @ delta_x.unsqueeze(-1)).squeeze(-1) # (B, D)
-        delta_x_vert = delta_x - delta_x_paral # (B, D)
-        loss = ((delta_x_paral/sigma_paral.unsqueeze(-1)) ** 2 + (delta_x_vert/sigma_vert.unsqueeze(-1)) ** 2).sum(dim = 1)/2 # (B,)
-        loss += n * torch.log(sigma_paral) + (D-n) * torch.log(sigma_vert)
-        return loss, sigma_paral, sigma_vert
+        d_sq = (delta_x ** 2).sum(dim = 1) # (B,)
+        t = J.permute(0, 2, 1) @ delta_x.unsqueeze(-1) # (B, n, 1)
+        d_proj_sq = (t.permute(0, 2, 1) @ torch.linalg.solve(G, t)).squeeze() # (B,)
+        
+        return d_sq/(2 * sigma_vert ** 2) +  d_proj_sq * (1/(2 * sigma_paral ** 2) - 1/(2 * sigma_vert ** 2))
     
-    def get_sum_of_gradients(self, x, z):
-        return torch.autograd.grad(partial(self.recon_loss, x)(z)[0].sum(), z, create_graph=True)[0].sum(0)
 
-    def function_for_hessian(self, z, x, d_para, d_vert):
+    def get_alpha_sum(self, x, z):
+        """
+        x : (B, D)
+        z : (B, n)
+        """
+        D = x.shape[1]
+        n = z.shape[1]
+        x_star = self.decoder(z).view(-1, D) # (B, D)
+        J = jacobian_of_f(self.decoder, z, create_graph=True)
+        G = J.permute(0, 2, 1) @ J
+        delta_x = x - x_star # (B, D)
+        d_sq = (delta_x ** 2).sum(dim = 1) # (B,)
+        t = J.permute(0, 2, 1) @ delta_x.unsqueeze(-1) # (B, n, 1)
+        d_proj_sq = (t.permute(0, 2, 1) @ torch.linalg.solve(G, t)).squeeze() # (B,)
+        alpha = torch.sqrt(d_proj_sq/d_sq) # (B,)
+        return alpha.sum()
+
+    def get_alpha_sq(self, x, z):
+        """
+        x : (B, D)
+        z : (B, n)
+        """
+        D = x.shape[1]
+        n = z.shape[1]
+        x_star = self.decoder(z).view(-1, D) # (B, D)
+        J = jacobian_of_f(self.decoder, z, create_graph=True)
+        G = J.permute(0, 2, 1) @ J
+        delta_x = x - x_star # (B, D)
+        d_sq = (delta_x ** 2).sum(dim = 1) # (B,)
+        t = J.permute(0, 2, 1) @ delta_x.unsqueeze(-1) # (B, n, 1)
+        d_proj_sq = (t.permute(0, 2, 1) @ torch.linalg.solve(G, t)).squeeze() # (B,)
+        return d_proj_sq/d_sq
+    
+    def function_for_hessian(self, z, x):
         """
         caculate d.detach().T @ d
         x : (D)
@@ -112,10 +141,8 @@ class EnergyAE(nn.Module):
         z = z.unsqueeze(0) # (1, n)
         x_star = self.decoder(z).view(-1, D) # (1, D)
         delta_x = (x - x_star) # (1, D)
-        sigma_paral = torch.exp(self.log_sig_paral)
-        sigma_vert = torch.exp(self.log_sig_vert)
-        out = delta_x @ (d_para.T/sigma_paral ** 2 +  d_vert.T/sigma_vert ** 2) # (1, )
-        return out
+        out = (delta_x ** 2).sum(dim = 1)/2
+        return out.squeeze()
     
         
     def train_step(self, x, optimizer, **kwargs):
@@ -144,17 +171,29 @@ class EnergyAE(nn.Module):
         D = x.shape[1]
         n = z_star.shape[1]
         
-        # compute hessian
-        # compute_batch_hessian = vmap(hessian(self.function_for_hessian, argnums = 0), in_dims = (0, 0))
-        # hess = compute_batch_hessian(z_star, x) # (B, n, n)
-        hess = jacobian(partial(self.get_sum_of_gradients, x), z_star.detach(), vectorize=True).swapaxes(0, 1) + torch.eye(n).to(z_star).repeat(bs, 1, 1)
+        delta_x = x - self.decoder(z_star.detach()).view(-1, D) # (B, D)
+        d = (delta_x ** 2).sum(dim = 1)# (B,)
+        J_alpha = jacobian(partial(self.get_alpha_sum, x), z_star.detach(), create_graph=True, vectorize=True) # (B, n)
+        alpha_sq = self.get_alpha_sq(x, z_star.detach()) # (B,)
+        G_alpha = torch.bmm(J_alpha.unsqueeze(2), J_alpha.unsqueeze(1))
+        
+        # # compute hessian
+        compute_batch_hessian = vmap(hessian(self.function_for_hessian, argnums = 0), in_dims = (0, 0))
+        hess = compute_batch_hessian(z_star.detach(), x) # (B, n, n)
+        
+        sigma_paral = torch.exp(self.log_sig_paral)
+        sigma_vert = torch.exp(self.log_sig_vert)
+
+        Precision = hess *(1/ sigma_vert ** 2 )\
+            + d.unsqueeze(1).unsqueeze(2) * G_alpha * (1/sigma_paral**2 - 1/sigma_vert**2) + torch.eye(n).to(z_star).repeat(bs, 1, 1)
+
         # Find minimum eigenvalue
-        eigvals = torch.linalg.eigvalsh(hess)
-        print("Hessian eigenvalues:")
+        eigvals = torch.linalg.eigvalsh(Precision)
+        print("Precision eigenvalues:")
         print(eigvals[0, :])
         eigvals_min = torch.min(eigvals, dim = 1).values # (B,)
         delta = torch.maximum(1/self.max_latent_variance- eigvals_min, torch.zeros_like(eigvals_min))
-        Precision = hess + torch.eye(n).to(z_star).repeat(bs, 1, 1) * delta.unsqueeze(1).unsqueeze(2)
+        Precision = Precision + torch.eye(n).to(z_star).repeat(bs, 1, 1) * delta.unsqueeze(1).unsqueeze(2)
         eigvals = eigvals + delta.unsqueeze(1)
         # posterior sampling
         L = torch.linalg.cholesky(Precision, upper = True)
@@ -163,10 +202,9 @@ class EnergyAE(nn.Module):
 
         # compute recon loss
         x = x.repeat(n_eval, 1) # (n_eval * B, D)
-        recon_loss, sigma_paral, sigma_vert = self.recon_loss(x, z_sample.view(-1, n)) # (n_eval * B,)
+        recon_loss = self.recon_loss(x, z_sample.view(-1, n)) # (n_eval * B,)
         recon_loss = recon_loss.view(n_eval, bs).mean(dim = 0) # (B,)
-        sigma_paral = sigma_paral.view(n_eval, bs).mean(dim = 0) # (B,)
-        sigma_vert = sigma_vert.view(n_eval, bs).mean(dim = 0) # (B,)
+        
 
         # compute latent energy
         latent_energy = (z_star ** 2).sum(dim = 1) / 2 + (1 / eigvals).sum(dim = 1)/2
@@ -175,15 +213,15 @@ class EnergyAE(nn.Module):
         logdet_loss = torch.log(eigvals).sum(dim = 1)/2 # (B,)
 
         # compute sigma_loss
-        # sigma_loss = n * self.log_sig_paral + (D-n) * self.log_sig_vert 
-        # sigma_loss = sigma_loss.repeat(bs)
+        sigma_loss = n * self.log_sig_paral + (D-n) * self.log_sig_vert 
+        sigma_loss = sigma_loss.repeat(bs)
         # compute scaled isometric loss
         if train:
             eig_mean = eigvals.mean(dim = 1, keepdim = True) # (B, 1)
             scaled_isometric_loss = ((eigvals/eig_mean - 1) ** 2).sum(dim = 1) # (B,)
         else:
             scaled_isometric_loss = torch.zeros_like(recon_loss)
-        neg_log_prob = (recon_loss + latent_energy + logdet_loss)/D #  + sigma_loss
+        neg_log_prob = (recon_loss + latent_energy + logdet_loss+ sigma_loss)/D #  
 
         d_return = {"neg_log_prob": neg_log_prob,
                     "recon_loss": recon_loss,
@@ -191,7 +229,9 @@ class EnergyAE(nn.Module):
                     "log_det": logdet_loss,
                     "scaled_isometric_loss": scaled_isometric_loss,
                     "sigma_paral": sigma_paral,
-                    "sigma_vert": sigma_vert}
+                    "sigma_vert": sigma_vert,
+                    "alpha_sq": alpha_sq,
+                    }
 
         return d_return
     

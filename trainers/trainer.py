@@ -35,6 +35,8 @@ class BaseTrainer:
 
         optimizer = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
                         {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
+                        {'params': model.log_sig_paral, 'lr':cfg.optimizer['lr_sigma']},
+                        {'params': model.log_sig_vert, 'lr':cfg.optimizer['lr_sigma']},
                         # {'params': sigma_params, 'lr':cfg.optimizer['lr_sigma']},
                         ])
 
@@ -43,7 +45,7 @@ class BaseTrainer:
                 model.train()
                 start_ts = time.time()
 
-                d_train_t = model.train_step(x.to(self.device), optimizer=self.optimizer, **kwargs)
+                d_train_t = model.train_step(x.to(self.device), optimizer=optimizer, **kwargs)
 
                 # update target encoder
                 # tau = 0.005
