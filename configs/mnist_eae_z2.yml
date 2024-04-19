@@ -22,7 +22,7 @@ data:
   training:
     dataset: MNIST
     root: dataset
-    batch_size: 64
+    batch_size: 128
     n_workers: 4
     split: training
     shuffle: True
@@ -30,7 +30,7 @@ data:
   validation:
     dataset: MNIST
     root: dataset
-    batch_size: 64
+    batch_size: 128
     n_workers: 4
     split: validation
     shuffle: False
@@ -38,7 +38,7 @@ data:
   test:
     dataset: MNIST
     root: dataset
-    batch_size: 64
+    batch_size: 128
     n_workers: 4
     split: test
     shuffle: False
@@ -46,7 +46,7 @@ data:
   OOD_validation:
     dataset: MNIST
     root: dataset
-    batch_size: 64
+    batch_size: 128
     n_workers: 4
     split: validation
     shuffle: False
@@ -54,7 +54,7 @@ data:
   OOD_test:
     dataset: MNIST
     root: dataset
-    batch_size: 64
+    batch_size: 128
     n_workers: 4
     split: test
     shuffle: False

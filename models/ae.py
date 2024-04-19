@@ -82,9 +82,14 @@ class EnergyAE(nn.Module):
         """
         D = x.shape[1]
         n = z.shape[1]
-        x_star = self.decoder(z).view(-1, D) # (B, D)
-        sigma_paral = torch.exp(self.log_sig_paral)
-        sigma_vert = torch.exp(self.log_sig_vert)
+        # x_star = self.decoder(z).view(-1, D) # (B, D)
+        x_star, sigma = self.decoder.forward_with_sigma(z)
+        x_star = x_star.view(-1, D)
+        # sigma_paral = torch.exp(self.log_sig_paral)
+        # sigma_vert = torch.exp(self.log_sig_vert)
+        sigma_paral = sigma[:, 0] # (B,)
+        sigma_vert = sigma[:, 1] # (B,)
+
         J = jacobian_of_f(self.decoder, z, create_graph=True)
         G = J.permute(0, 2, 1) @ J
         delta_x = (x - x_star) # (B, D)
@@ -94,39 +99,43 @@ class EnergyAE(nn.Module):
         
         return d_sq/(2 * sigma_vert ** 2) +  d_proj_sq * (1/(2 * sigma_paral ** 2) - 1/(2 * sigma_vert ** 2))
     
-
-    def get_alpha_sum(self, x, z):
+    def get_proj_x(self, x, z):
         """
         x : (B, D)
         z : (B, n)
         """
         D = x.shape[1]
         n = z.shape[1]
-        x_star = self.decoder(z).view(-1, D) # (B, D)
+        x_star = self.decoder(z).view(-1, D)
         J = jacobian_of_f(self.decoder, z, create_graph=True)
         G = J.permute(0, 2, 1) @ J
-        delta_x = x - x_star # (B, D)
-        d_sq = (delta_x ** 2).sum(dim = 1) # (B,)
-        t = J.permute(0, 2, 1) @ delta_x.unsqueeze(-1) # (B, n, 1)
-        d_proj_sq = (t.permute(0, 2, 1) @ torch.linalg.solve(G, t)).squeeze() # (B,)
-        alpha = torch.sqrt(d_proj_sq/d_sq) # (B,)
-        return alpha.sum()
+        delta_x = x_star - x
+        t = J.permute(0, 2, 1) @ delta_x.unsqueeze(-1)
+        proj_x = (J @ torch.linalg.solve(G, t)).squeeze()
+        return proj_x
 
-    def get_alpha_sq(self, x, z):
+
+    def get_scaled_x_paral_and_x_vert(self, x, z):
         """
         x : (B, D)
         z : (B, n)
         """
         D = x.shape[1]
         n = z.shape[1]
-        x_star = self.decoder(z).view(-1, D) # (B, D)
+        x_star, sigma = self.decoder.forward_with_sigma(z)
+        sigma_paral = sigma[:, 0] # (B,)
+        sigma_vert = sigma[:, 1] # (B,)
+        x_star = x_star.view(-1, D)
         J = jacobian_of_f(self.decoder, z, create_graph=True)
         G = J.permute(0, 2, 1) @ J
-        delta_x = x - x_star # (B, D)
-        d_sq = (delta_x ** 2).sum(dim = 1) # (B,)
-        t = J.permute(0, 2, 1) @ delta_x.unsqueeze(-1) # (B, n, 1)
-        d_proj_sq = (t.permute(0, 2, 1) @ torch.linalg.solve(G, t)).squeeze() # (B,)
-        return d_proj_sq/d_sq
+        delta_x = x_star - x
+        t = J.permute(0, 2, 1) @ delta_x.unsqueeze(-1)
+        proj_x = (J @ torch.linalg.solve(G, t)).squeeze()
+        vert_x = delta_x - proj_x
+        scaled_proj_x = proj_x / sigma_paral.unsqueeze(1) # (B, D)
+        scaled_vert_x = vert_x / sigma_vert.unsqueeze(1) # (B, D)
+        return torch.cat([scaled_proj_x, scaled_vert_x], dim = 1)
+
     
     def function_for_hessian(self, z, x):
         """
@@ -152,8 +161,8 @@ class EnergyAE(nn.Module):
         loss = loss.mean()
         loss.backward()
 
-        torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), 0.1)
-        torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 0.1)
+        # torch.nn.utils.clip_grad_norm_(self.decoder.parameters(), 0.1)
+        # torch.nn.utils.clip_grad_norm_(self.encoder.parameters(), 0.1)
 
         optimizer.step()
         
@@ -171,22 +180,40 @@ class EnergyAE(nn.Module):
         D = x.shape[1]
         n = z_star.shape[1]
         
-        delta_x = x - self.decoder(z_star.detach()).view(-1, D) # (B, D)
-        d = (delta_x ** 2).sum(dim = 1)# (B,)
-        J_alpha = jacobian(partial(self.get_alpha_sum, x), z_star.detach(), create_graph=True, vectorize=True) # (B, n)
-        alpha_sq = self.get_alpha_sq(x, z_star.detach()) # (B,)
-        G_alpha = torch.bmm(J_alpha.unsqueeze(2), J_alpha.unsqueeze(1))
+
+        # J = jacobian_of_f(self.decoder, z_star, create_graph=True)
+        # J_proj = jacobian_of_f(partial(self.get_proj_x, x.repeat(n, 1)), z_star, create_graph=True)
+        # J_vert = J - J_proj
+
+        # G_proj = J_proj.permute(0, 2, 1) @ J_proj
+        # G_vert = J_vert.permute(0, 2, 1) @ J_vert
+        
+        
+        # sigma_paral = torch.exp(self.log_sig_paral)
+        # sigma_vert = torch.exp(self.log_sig_vert)
+
+        # Precision = G_vert *(1/ sigma_vert ** 2 )+  G_proj * (1/sigma_paral**2) + torch.eye(n).to(z_star).repeat(bs, 1, 1)
+        J = jacobian_of_f(partial(self.get_scaled_x_paral_and_x_vert, x.repeat(n, 1)), z_star, create_graph=True)
+        J_proj = J[:, :D, :]
+        J_vert = J[:, D:, :]
+        G_proj = J_proj.permute(0, 2, 1) @ J_proj
+        G_vert = J_vert.permute(0, 2, 1) @ J_vert
+        Precision = G_vert + G_proj + torch.eye(n).to(z_star).repeat(bs, 1, 1)
+        # delta_x = x - self.decoder(z_star.detach()).view(-1, D) # (B, D)
+        # d = (delta_x ** 2).sum(dim = 1)# (B,)
+        # J_alpha = jacobian(partial(self.get_alpha_sum, x), z_star.detach(), create_graph=True, vectorize=True) # (B, n)
+        # alpha_sq = self.get_alpha_sq(x, z_star.detach()) # (B,)
+        # G_alpha = torch.bmm(J_alpha.unsqueeze(2), J_alpha.unsqueeze(1))
         
         # # compute hessian
-        compute_batch_hessian = vmap(hessian(self.function_for_hessian, argnums = 0), in_dims = (0, 0))
-        hess = compute_batch_hessian(z_star.detach(), x) # (B, n, n)
+        # compute_batch_hessian = vmap(hessian(self.function_for_hessian, argnums = 0), in_dims = (0, 0))
+        # hess = compute_batch_hessian(z_star.detach(), x) # (B, n, n)
         
-        sigma_paral = torch.exp(self.log_sig_paral)
-        sigma_vert = torch.exp(self.log_sig_vert)
+        # sigma_paral = torch.exp(self.log_sig_paral)
+        # sigma_vert = torch.exp(self.log_sig_vert)
 
-        Precision = hess *(1/ sigma_vert ** 2 )\
-            + d.unsqueeze(1).unsqueeze(2) * G_alpha * (1/sigma_paral**2 - 1/sigma_vert**2) + torch.eye(n).to(z_star).repeat(bs, 1, 1)
-
+        # Precision = hess *(1/ sigma_vert ** 2 )\
+        #     + d.unsqueeze(1).unsqueeze(2) * G_alpha * (1/sigma_paral**2 - 1/sigma_vert**2) + torch.eye(n).to(z_star).repeat(bs, 1, 1)
         # Find minimum eigenvalue
         eigvals = torch.linalg.eigvalsh(Precision)
         print("Precision eigenvalues:")
@@ -213,8 +240,13 @@ class EnergyAE(nn.Module):
         logdet_loss = torch.log(eigvals).sum(dim = 1)/2 # (B,)
 
         # compute sigma_loss
-        sigma_loss = n * self.log_sig_paral + (D-n) * self.log_sig_vert 
-        sigma_loss = sigma_loss.repeat(bs)
+        sigma = self.decoder.sigma(z_sample.view(-1, n)) # (n_eval * B, 2)
+        # sigma_loss = n * self.log_sig_paral + (D-n) * self.log_sig_vert 
+        sigma_paral = sigma[:,0]
+        sigma_vert = sigma[:,1]
+        sigma_loss = n * torch.log(sigma_paral) + (D-n) * torch.log(sigma_vert)
+        # sigma_loss = sigma_loss.repeat(bs)
+        sigma_loss = sigma_loss.view(n_eval, bs).mean(dim = 0)
         # compute scaled isometric loss
         if train:
             eig_mean = eigvals.mean(dim = 1, keepdim = True) # (B, 1)
@@ -230,7 +262,7 @@ class EnergyAE(nn.Module):
                     "scaled_isometric_loss": scaled_isometric_loss,
                     "sigma_paral": sigma_paral,
                     "sigma_vert": sigma_vert,
-                    "alpha_sq": alpha_sq,
+                    # "alpha_sq": alpha_sq,
                     }
 
         return d_return
