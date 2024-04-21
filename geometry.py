@@ -167,9 +167,9 @@ def get_pullbacked_Riemannian_metric(func, z, create_graph=True):
 def get_projection_matrix_times_v(func, v, z):
     J = jacobian_of_f(func, z, create_graph=True)
     pull_back_metric = J.permute(0, 2, 1)@J
-    inverse_pull_back_metric = torch.linalg.pinv(pull_back_metric, hermitian=True)
-    projection_matrix = J @ inverse_pull_back_metric @ J.permute(0, 2, 1)
-    Tv = (projection_matrix @ v).squeeze(-1) # (bs, x_dim)
+    # inverse_pull_back_metric = torch.linalg.pinv(pull_back_metric, hermitian=True)
+    t = J.permute(0, 2, 1)@v
+    Tv = (J @ torch.linalg.solve(pull_back_metric, t)).squeeze(-1)
     return Tv
 
 def get_projection_coord_rep(func, z, x, create_graph = True, return_curvature = True, eta = None):
@@ -213,10 +213,10 @@ def curvature_reg(func, z, create_graph = True, eta = None):
     J = jacobian_of_f(func, z_augmented, create_graph=create_graph)
     bs, x_dim, z_dim = J.shape
     pull_back_metric = J.permute(0, 2, 1)@J
-    inverse_pull_back_metric = torch.linalg.pinv(pull_back_metric, hermitian=True)
+    # inverse_pull_back_metric = torch.linalg.pinv(pull_back_metric, hermitian=True)
     v_ = torch.randn((bs, x_dim)).to(z).unsqueeze(-1)
     w = torch.randn((bs, z_dim)).to(z).unsqueeze(-1)
-    w_tilda = inverse_pull_back_metric @ w
+    w_tilda = torch.linalg.solve(pull_back_metric, w)
     grad_T_w = torch.autograd.functional.jvp(
         partial(get_projection_matrix_times_v, func, v_), z_augmented, v=w.squeeze(), create_graph=create_graph)[1]
     grad_T_w_tilda = torch.autograd.functional.jvp(

@@ -13,16 +13,16 @@ model:
     arch: deconv2
     nh: 8
     out_activation: sigmoid 
-  x_dim: 784 # 1 when using conv arch, 784 when using fc arch
+  x_dim: 1 # 1 when using conv arch, 784 when using fc arch
   z_dim: 16
   energy_ae:
     z_dim: 16
-    max_latent_variance: 1
+    max_latent_variance: 10
 data:
   training:
     dataset: MNIST
     root: dataset
-    batch_size: 128
+    batch_size: 64
     n_workers: 4
     split: training
     shuffle: True
@@ -30,7 +30,7 @@ data:
   validation:
     dataset: MNIST
     root: dataset
-    batch_size: 128
+    batch_size: 64
     n_workers: 4
     split: validation
     shuffle: False
@@ -38,7 +38,7 @@ data:
   test:
     dataset: MNIST
     root: dataset
-    batch_size: 128
+    batch_size: 64
     n_workers: 4
     split: test
     shuffle: False
@@ -46,7 +46,7 @@ data:
   OOD_validation:
     dataset: MNIST
     root: dataset
-    batch_size: 128
+    batch_size: 64
     n_workers: 4
     split: validation
     shuffle: False
@@ -54,7 +54,7 @@ data:
   OOD_test:
     dataset: MNIST
     root: dataset
-    batch_size: 128
+    batch_size: 64
     n_workers: 4
     split: test
     shuffle: False
@@ -62,7 +62,7 @@ data:
   
 trainer: base
 training:
-  n_epoch: 500
+  n_epoch: 1500
   n_epoch_pre: 100
   n_epoch_ebm: 30
   fix_decoder: false

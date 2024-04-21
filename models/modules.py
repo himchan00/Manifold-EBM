@@ -518,7 +518,8 @@ class ConvNet2FC(nn.Module):
 
 
 class DeConvNet2(nn.Module):
-    def __init__(self, in_chan=1, out_chan=1, nh=8, out_activation='linear'):
+    def __init__(self, in_chan=1, out_chan=1, nh=8, out_activation='linear',
+                 use_spectral_norm=False,):
         """nh: determines the numbers of conv filters"""
         super(DeConvNet2, self).__init__()
         self.conv1 = nn.ConvTranspose2d(in_chan, nh * 16, kernel_size=4, bias=True)
@@ -527,8 +528,12 @@ class DeConvNet2(nn.Module):
         self.conv4 = nn.ConvTranspose2d(nh * 8, nh * 4, kernel_size=3, bias=True)
         self.conv5 = nn.ConvTranspose2d(nh * 4, out_chan, kernel_size=3, bias=True)
 
+        self.max1 = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.fc1 = nn.Linear(nh * 8 * 6 * 6, 1024)
+        self.fc2 = nn.Linear(1024, 2)
         self.in_chan, self.out_chan = in_chan, out_chan
         self.out_activation = get_activation(out_activation) 
+
 
     def forward(self, x):
         if len(x.size()) == 4:
@@ -550,3 +555,50 @@ class DeConvNet2(nn.Module):
             x = self.out_activation(x)
         return x
 
+    def sigma(self, x):
+        if len(x.size()) == 4:
+            pass
+        else:
+            x = x.unsqueeze(2).unsqueeze(2)
+        x = self.conv1(x)
+        x = F.relu(x)
+        x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
+        x = self.conv2(x)
+        x = F.relu(x)
+        x = self.conv3(x) # (bs, 64, 12, 12)
+        x = F.relu(x)
+        x = self.max1(x) # (bs, 64, 6, 6)
+        x = x.view(x.size(0), -1) # (bs, 64*6*6)
+        x = self.fc1(x)
+        x = F.relu(x)
+        x = self.fc2(x)
+        x = torch.exp(x)
+        return x
+    
+    def forward_with_sigma(self, x):
+        if len(x.size()) == 4:
+            pass
+        else:
+            x = x.unsqueeze(2).unsqueeze(2)
+        x = self.conv1(x)
+        x = F.relu(x)
+        x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
+        x = self.conv2(x)
+        x = F.relu(x)
+        x = self.conv3(x)
+        x = F.relu(x)
+        
+        x_d = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=True)
+        x_d = self.conv4(x_d)
+        x_d = F.relu(x_d)
+        x_d = self.conv5(x_d)
+        if self.out_activation is not None:
+            x_d = self.out_activation(x_d)
+        x_s = self.max1(x)
+        x_s = x_s.view(x_s.size(0), -1)
+        x_s = self.fc1(x_s)
+        x_s = F.relu(x_s)
+        x_s = self.fc2(x_s)
+        x_s = torch.exp(x_s)
+        return x_d, x_s
+    

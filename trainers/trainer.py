@@ -35,8 +35,8 @@ class BaseTrainer:
 
         optimizer = optim.Adam([{'params': model.encoder.parameters(), 'lr': cfg.optimizer['lr_encoder']},
                         {'params': model.decoder.parameters(), 'lr':cfg.optimizer['lr_decoder']},
-                        {'params': model.log_sig_paral, 'lr':cfg.optimizer['lr_sigma']},
-                        {'params': model.log_sig_vert, 'lr':cfg.optimizer['lr_sigma']},
+                        # {'params': model.log_sig_paral, 'lr':cfg.optimizer['lr_sigma']},
+                        # {'params': model.log_sig_vert, 'lr':cfg.optimizer['lr_sigma']},
                         # {'params': sigma_params, 'lr':cfg.optimizer['lr_sigma']},
                         ])
 
@@ -120,10 +120,10 @@ class BaseTrainer:
         """run prediction for the whole dataset"""
         l_result = {}
         for x, _ in dl:
-            with torch.no_grad():
-                if flatten:
-                    x = x.view(len(x), -1)
-                pred = m.neg_log_prob(x.cuda(device), n_eval = 10, train = False)
+            # with torch.no_grad():
+            if flatten:
+                x = x.view(len(x), -1)
+            pred = m.neg_log_prob(x.cuda(device), n_eval = 10, train = False)
 
             for key, val in pred.items():
                 if key in l_result:
